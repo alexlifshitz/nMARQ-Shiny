@@ -1,0 +1,1198 @@
+---
+title: "nMARQ Generator Log Files Data Analysis"
+author: "Alexander Lifshitz"
+date: '`r format(Sys.time(), "%B %d, %Y %H:%M:%S %Z")`'
+output:
+  html_document:
+    fig_caption: yes
+    keep_md: yes
+    number_sections: yes
+    toc: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  word_document:
+    fig_caption: yes
+    toc: yes
+---
+*This report is auto-generated using R Markdown Language. The source code for this report (.Rmd file) is attached.* 
+
+```{r auto_num_functions, echo=FALSE}
+
+# A function for generating captions and cross-references
+
+fig <- local({
+    i <- 0
+    list(
+        cap=function(refName, text, center=FALSE, col="black", inline=FALSE) {
+            i <<- i + 1
+            ref[[refName]] <<- i
+            css_ctr <- ""
+            if (center) css_ctr <- "text-align:center; display:inline-block; width:100%;"
+            cap_txt <- paste0("<span style=\"color:", col, "; ", css_ctr, "\">Figure ", i, ": ", text , "</span>")
+            anchor <- paste0("<a name=\"", refName, "\"></a>")
+            if (inline) {
+                paste0(anchor, cap_txt)    
+            } else {
+                list(anchor=anchor, cap_txt=cap_txt)
+            }
+        },
+        
+        ref=function(refName, link=FALSE, checkRef=TRUE) {
+            
+            ## This function puts in a cross reference to a caption. You refer to the
+            ## caption with the refName that was passed to fig$cap() (not the code chunk name).
+            ## The cross reference can be hyperlinked.
+            
+            if (checkRef && !refName %in% names(ref)) stop(paste0("fig$ref() error: ", refName, " not found"))
+            if (link) {
+                paste0("<A HREF=\"#", refName, "\">Figure ", ref[[refName]], "</A>")
+            } else {
+                paste0("Figure ", ref[[refName]])
+            }
+        },
+        
+        ref_all=function(){
+            ## For debugging
+            ref
+        })
+})
+
+```
+
+```{r setup, echo=FALSE}
+
+## This chunk replaces the default hook for processing plots. It achieves the purposes,
+## of laying out auto-numbered captions, but other functionality may be gone.
+
+library(knitr)
+knit_hooks$set(plot = function(x, options) {
+    sty <- ""
+    if (options$fig.align == 'default') {
+        sty <- ""
+    } else {
+        sty <- paste0(" style=\"text-align:", options$fig.align, ";\"")
+    }
+    
+    if (is.list(options$fig.cap)) {
+        ## options$fig.cap is a list returned by the function fig$cap()
+        str_caption <- options$fig.cap$cap_txt
+        str_anchr <- options$fig.cap$anchor
+    } else {
+        ## options$fig.cap is a character object (hard coded, no anchor)
+        str_caption <- options$fig.cap
+        str_anchr <- ""
+    }
+    
+    paste('<figure', sty, '>', str_anchr, '<img src="',
+        opts_knit$get('base.url'), paste(x, collapse = '.'),
+        '"><figcaption>', str_caption, '</figcaption></figure>',
+        sep = '')
+    
+})
+```
+
+```{r read_fig_cap, echo=FALSE}
+
+## This chucnk will read through *this* Rmd file, and attempt to extract all of the 
+## labels (not caption text) used for Figure captions. These labels are used
+## as anchors, so scanning through the document now will allow us to create cross references
+## before the caption actually appears. 
+
+## Get the name of this Rmd file
+rmdFn <- knitr::current_input()  # filename of input document
+
+## Read lines and close connection
+rmdCon <- file(rmdFn, open = "r")
+rmdLines <- readLines(rmdCon)
+close(rmdCon)
+
+## Pull out all occurences of at least one back tick, followed 
+## by any number of characters, followed by fig$cap (all on one line)
+figscap_idx <- grep("`+(.*)fig\\$cap", rmdLines)
+rmdLines <- rmdLines[figscap_idx]
+
+## Get rid of everything up until the start of the caption label
+## This presumes the caption label is the first argument of fig$cap()
+## E.g., fig.cap = fig$cap("my_label", ...)
+rmdLinesSansPre <- sub("(.*)fig\\$cap(.*?)[\"']", "", rmdLines)
+
+## Identify everything up until the first quote
+match_data <- regexpr("(.*?)[\"']", rmdLinesSansPre)
+
+## Reduce the length by one, because we're not interested in the final quote
+attr(match_data, "match.length") <- attr(match_data, "match.length") - 1
+
+## Extract
+fig_labels <- regmatches(rmdLinesSansPre, match_data, invert=FALSE)
+
+if (length(fig_labels) > 0) {
+
+    ## Test for duplicates
+    if (anyDuplicated(fig_labels) > 0) stop("Duplicate caption labels detected")
+    
+    ## Create a named list of Figure numbers
+    ref <- as.list(1:length(fig_labels))
+    names(ref) <- fig_labels
+}    
+```
+
+```{r echoset, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(pander)
+panderOptions('round', 2)
+panderOptions('keep.trailing.zeros', TRUE)
+panderOptions('table.alignment.default', 'left')
+panderOptions('table.alignment.rownames','left')
+```
+
+
+```{r libraries, warning=FALSE,message=FALSE}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(tidyr)
+library(fitdistrplus)
+library(gridExtra)
+library(reshape2)
+library(caret)
+library(rattle)
+library(stringr)
+library(ggmap)
+#library(plotly)
+
+df<-read.csv("data/nmarq_summary_new.csv",na.strings=c(""," ","#REF!","NA"))
+names(df) <- gsub("\\.", "", names(df))
+df$Date<-as.Date(df$Date,"%m/%d/%Y")
+```
+
+# Purpose
+
+During clinical use nMARQ generator records large amounts of log data related to the ablation therapy delivered. This data includes a time series of physical parameters such as electrodes temperature, power, impedance as well as technical data related to system performance. The purpose of this engineering report is to lay down a foundation for the data driven research of nMARQ generator performance in the field based on knowledge mining from automatically generated system log files.
+
+# Scope
+
+In this report we present a few examples of exploratory data analysis of more than 20,000 nMARQ log files collected from 21 largest nMARQ sites in Europe and US. The dataset mainly includes data for nMARQ catheter (D-1322-14) and a small portion of focal catheters used by some physicians to complete nMARQ procedures.
+
+```{r}
+pander(count(df, Catheter)%>%mutate(Percent=percent(n/sum(n)))%>%arrange(desc(n)))
+```
+Thus, unless otherwise stated, most of this report will focus on analysis of nMARQ catheter usage and performance. 
+
+# Summary
+
+We show that even a relatively simple analysis of large datasets of automatically generated data can be surprisingly insightful in completing a big picture and providing important details (otherwise difficult to obtain), which can support and drive evidence based decisions within R&D, medical and regulatory domains. 
+
+# Results
+
+## nMARQ dataset preparation
+
+```{r}
+
+c<-group_by(df,Hospital, Case) %>% summarize(Date=min(Date)) %>% group_by(Hospital) %>% summarize(NumCases=n(), MinDate =min(Date), MaxDate=max(Date)) %>% arrange(desc(NumCases))
+```
+
+In this report we analyze a dataset that was generated from nMARQ generator log files from `r nrow(c)` sites in US and Europe. The dataset includes a total of `r sum(c$NumCases)` clinical cases performed between `r min(c$MinDate)` and `r max(c$MaxDate)`. The number of cases from each site and the time period when the cases were performed are given in the following table 
+```{r}
+pander(c)
+```
+
+We should notice though that the database is not very balanced, such that only 3 hospitals out of 21 account for `r sum(c$NumCases[1:3])` cases (`r percent(sum(c$NumCases[1:3]/sum(c$NumCases)))`). The following maps allow intuitive visualization of the geographical locations of the sites, where the points size corresponds to the number of cases available from each site. 
+
+```{r, cache=TRUE, results='hide', message=FALSE, warning =FALSE}
+geo_df<-read.csv("data/sites_codebook.csv")
+geo_df<-mutate(geo_df,Location = paste(City,State, Continent))
+tmp<-sapply(geo_df$Location, geocode, simplify=TRUE)
+ll<-as.data.frame(t(tmp))
+ll$Location<-row.names(ll)
+geo_df<-merge(geo_df, ll, by="Location")
+geo_df<-dplyr::select(geo_df,-Location) %>%mutate(lon=as.numeric(lon), lat=as.numeric(lat))
+geo_df<-merge(geo_df, c, by.x="Code", by.y="Hospital")
+
+geo_EU<-filter(geo_df, Continent=="Europe")
+geo_US<-filter(geo_df, Continent=="USA")
+
+mapEU <- get_map(location = 'Europe', zoom = 4, maptype="roadmap", messaging=FALSE)
+mapUS <- get_map(location = 'USA', zoom = 4)
+
+mapPointsEU <- ggmap(mapEU) +geom_point(aes(x = lon, y = lat, size = NumCases), data = geo_EU, alpha = .5, color = "blue")+ xlim(min(geo_EU$lon)-3,max(geo_EU$lon)+4)+ylim(min(geo_EU$lat)-3,max(geo_EU$lat)+3)+scale_size_area(name="Number of Cases",max_size = 10, breaks = c(50, 100, 150, 200, 250), labels = c(50, 100, 150, 200, 250))+
+ theme(axis.ticks.x = element_blank(),
+       axis.text.x = element_blank(),
+       axis.ticks.y = element_blank(),
+       axis.text.y = element_blank(),
+       axis.title.x=element_blank(),
+       axis.title.y=element_blank())
+
+mapPointsUS <- ggmap(mapUS) +geom_point(aes(x = lon, y = lat, size = NumCases), data = geo_US, alpha = .5, color="darkgreen")+ xlim(min(geo_US$lon)-3,max(geo_US$lon)+3)+ylim(min(geo_US$lat)-3,max(geo_US$lat)+3)+scale_size_area(name="Number of Cases",max_size = 5, breaks = c(5, 10, 15), labels = c(5, 10, 15))+
+ theme(axis.ticks.x = element_blank(),
+       axis.text.x = element_blank(),
+       axis.ticks.y = element_blank(),
+       axis.text.y = element_blank(),
+       axis.title.x=element_blank(),
+       axis.title.y=element_blank())
+```
+
+
+```{r, fig.width=10, warning=FALSE,fig.cap=fig$cap("maps", "Sites locations in Europe and US", col="darkblue"), fig.align="center"}
+mapPointsEU
+mapPointsUS
+```
+
+The raw data used for the analysis was pre-processed by a Python program (attached to this report). 
+The input to the Python program are the individual log files (.txt), where each file corresponds to a single ablation. The output of the Python program is an excel/csv file which summarizes all ablations from all cases from all sites (attached to this report). This dataset is the input to the analysis performed and described in this report. 
+
+The dataset has `r nrow(df)` rows (ablations) and includes `r ncol(df)` columns (features/parameters).
+The first 23 out of `r ncol(df)` columns are summary features that identify and characterize each ablation.
+
+```{r}
+names(df)[1:23]
+```
+
+Here is a random sample from the dataset of the first 23 columns (transposed for clarity)
+```{r}
+set.seed(1234)
+pander(t(sample_n(df[,1:23],1)))
+```
+
+
+```{r,results='hide'}
+n_features<-ncol(df)-23
+```
+
+The next `r n_features` features are in fact `r n_features/10` features calculated for each one of 10 electrodes.
+These features include 
+
+```{r}
+rep_features<-names(df)[24:(23+n_features/10)]
+gsub("_1$","_X", rep_features)
+```
+where X stands for the electrode number between 1 to 10. Refer to the *features_codebook.txt* for the description of each feature. 
+
+```{r,results='hide',warning=FALSE}
+df$AblStart<-as.character(df$AblStart)
+
+nna<-!is.na(df$AblStart)
+df$AblStart[nna]<- ymd_hms(paste(df$Date[nna],df$AblStart[nna]))
+df$AblStart<-as.numeric(df$AblStart)
+
+df$AblationNum<-as.numeric(as.character(df$AblationNum))
+df$TimebetAbl<-as.numeric(as.character(df$TimebetAbl))
+df$StopType<-factor(ifelse(!grepl("Ablation Stop",df$AblStopReason) & !is.na(df$AblStopReason), "Error",
+                     ifelse(grepl("message from generator",df$AblStopReason),"Stopped",
+                            ifelse(grepl("reached final duration",df$AblStopReason),"FullDuration", "Unspecified"))),
+                     levels = c("FullDuration", "Stopped", "Error", "Unspecified"))
+```
+
+## Exploratory  analysis I  - nMARQ Case characterization
+
+### Extracting relevant variables 
+First, let's construct a dataset that will include basic information for each case including 
+
+1. Number of ablations
+2. Total RF time [min]
+3. Maximum time between ablations [sec]
+4. Case duration [min] (time between first and last ablation)
+
+```{r}
+dfc<-group_by(df,Hospital, Case) %>% 
+     summarize(Date=min(Date), 
+               NumAbl = sum(!is.na(AblDuration)), 
+               TotalRFtime = sum(AblDuration, na.rm=T)/60,
+               MaxTimebetAbl=max(TimebetAbl, na.rm=T),
+               CaseStart = min(AblStart, na.rm = TRUE),
+               CaseEnd = max(AblStart, na.rm = TRUE) )%>%
+     mutate(CaseDuration = (CaseEnd-CaseStart+30)/60 )%>%
+     dplyr::select(-CaseStart,-CaseEnd)
+
+dfc<-dfc[complete.cases(dfc),]
+```
+
+The random sample of 5 rows from the dataset 
+```{r}
+set.seed(1234)
+pander(sample_n(ungroup(dfc),5))
+```
+
+### Cleaning the data
+
+Let's take a quick look at the data
+```{r}
+pander(summary(dfc[,3:7]))
+```
+We can notice from the above that the data includes abnormal entries, such as negative total RF time, extremely short or extremely long case durations, etc.
+Thus before performing any kind of analysis, we need to clean the dataset to make sure it does not include artifacts. 
+
+In order to do that let's exclude the cases that 
+
+1.	Are longer than 5 hours 
+2.	Have less than 5 ablations or more than 100 ablations
+3.	Total RF time is less  than 5 minutes
+4.	Maximum time between ablations is longer than 30min
+
+```{r}
+dff<-filter(dfc, TotalRFtime>=5, NumAbl>=5, CaseDuration<300,NumAbl<100, MaxTimebetAbl<1800) 
+pander(summary(dff[,3:7]))
+```
+This leaves `r nrow(dff)` cases to be analyzed. 
+
+### Case Duration 
+
+Case duration (first to last ablation) fits very well a log-normal distribution 
+```{r,fig.cap=fig$cap("case_duration", "Case Duration - Histogram", col="darkblue"), fig.align="center"}
+f<-fitdist(dff$CaseDuration,"lnorm")
+denscomp(f, addlegend = FALSE, main = "Case Duration - first to last ablation [min]", xlab="[min]")
+```
+
+```{r}
+pander(quantile(dff$CaseDuration,c(0.01, 0.05,0.10, 0.25, 0.5,0.75, 0.9,0.95,0.99)))
+```
+
+We can see that the ablation treatment part of the procedure lasts less than `r ceiling(quantile(dff$CaseDuration,0.95)/60)` hours for 95% of the cases and less than `r ceiling(quantile(dff$CaseDuration,0.50)/10)*10` minutes for at least 50% of the cases. However, these results maybe skewed by a few sites with the highest volume of procedures. Thus it might be interesting to compare case durations between different sites. 
+```{r, fig.cap=fig$cap("case_duration_bp", "Case Duration - Boxplot by Hospital", col="darkblue"), fig.align="center"}
+ggplot(dff, aes(x=reorder(Hospital, CaseDuration, FUN=median, na.rm=T), y=CaseDuration)) +
+  geom_boxplot(fill="darkseagreen4")+
+  labs(title = "Case Duration")+
+  labs(y = "Case Duration[min]",x = "Hospital") + coord_flip() +
+     geom_label(data=count(dff,Hospital), aes(x=Hospital, y=max(dff$CaseDuration)*1.05, label= n), size=3, fill="steelblue", color="white")
+```
+
+Note: The numbers in the blue boxes reflect the number of analyzed cases per each site. 
+
+As we can see, the sites with most of the data (EU-AU and EU-CH) are also the champions in finishing procedures fast (might be a direct consequence of experience). Other sites with less volume have longer case durations but their impact on the overall statistics is limited. 
+
+### Total RF ablation time in procedure (may also include RF time of focal touch-ups)
+
+The total RF time also fits very well a log-normal distribution
+```{r,fig.cap=fig$cap("totalRF", "Total RF time - Histogram", col="darkblue"), fig.align="center"}
+f<-fitdist(dff$TotalRFtime,"lnorm")
+denscomp(f, addlegend = FALSE, main="Total RF time [min]", xlab = "[min]")
+```
+
+```{r}
+pander(quantile(dff$TotalRFtime,c(0.01, 0.05,0.10, 0.25, 0.5,0.75, 0.9,0.95,0.99)))
+```
+
+We can see that the total ablation (RF on) duration is less than `r ceiling(quantile(dff$TotalRFtime,0.95)/5)*5` minutes for 95% of the cases and less than `r ceiling(quantile(dff$TotalRFtime,0.50)/5)*5` minutes for at least 50% of the cases.
+Again, we would like to see how RF ablations time varies between different sites. 
+
+```{r, fig.cap=fig$cap("totalRF_bp", "Total RF time - Boxplot by Hospital", col="darkblue"), fig.align="center"}
+ggplot(dff, aes(x=reorder(Hospital, TotalRFtime, FUN=median, na.rm=T), y=TotalRFtime)) +
+  geom_boxplot(fill="plum4")+
+  labs(title = "Total RF time")+
+  labs(y = "RF time [min]",x = "Hospital") + coord_flip()+
+     geom_label(data=count(dff,Hospital), aes(x=Hospital, y=max(dff$TotalRFtime)*1.05, label= n), size=3, fill="steelblue", color="white")
+```
+
+### Number of ablations per procedure
+The number of ablations in a procedure is described by the following log-normal distribution
+```{r,fig.cap=fig$cap("NumAbl", "Number of Ablations per procedure -PDF", col="darkblue"), fig.align="center"}
+f<-fitdist(dff$NumAbl,"lnorm")
+denscomp(f, addlegend = FALSE, main="Number of Ablations", xlab = "# Ablations")
+```
+
+```{r}
+pander(quantile(dff$NumAbl,c(0.01, 0.05,0.10, 0.25, 0.5,0.75, 0.9,0.95,0.99)))
+```
+We may notice that 95% of the cases have no more than `r ceiling(quantile(dff$NumAbl,0.95))` ablations. 
+The following graph shows how number of ablations varies among different hospitals, possibly implying yet another differentiating workflow factor.
+
+```{r,fig.cap=fig$cap("NumAbl2", "Number of Ablations per procedure -boxplots", col="darkblue"), fig.align="center"}
+ggplot(dff, aes(x=reorder(Hospital, NumAbl, FUN=median, na.rm=T), y=NumAbl)) +
+  geom_boxplot(fill="violetred2")+
+  labs(title = "Number of Ablations per procedure")+
+  labs(y = "Number of Ablations",x = "Hospital") + coord_flip()+
+     geom_label(data=count(dff,Hospital), aes(x=Hospital, y=max(dff$NumAbl)*1.05, label= n), size=3, fill="steelblue", color="white")
+```
+
+
+### Time between ablations and Ablation Duration
+Time between ablations and Ablation Duration is a strong function of the workflow, thus the statistics maybe skewed due to the fact that about `r percent(sum(c$n[1:3]/sum(c$n)))` of the database are drawn from only 3 sites. The characterization of time between ablations and ablation duration is performed directly on the individual ablations, and not on case by case level. 
+
+Let's have a look at the time between ablations in the entire database of `r nrow(df)` ablations. 
+```{r}
+pander(quantile(df$TimebetAbl,c(0.01, 0.05,0.10, 0.25, 0.5,0.75, 0.9,0.95,0.99), na.rm=TRUE))
+```
+
+As before, we need to eliminate the outliers before the proper analysis is performed. 
+The following ablation records will be excluded:
+
+1. Focal ablations.
+2. Ablations shorter than 5 seconds. 
+3. Ablations with time between ablations less than 5 and longer than  300 seconds.
+4. Ablations above `r quantile(dff$NumAbl,0.75)`th ablation (75th percentile). Assuming that many of these are touch-ups which may be performed at relatively longer intervals.
+5. Ablations that had errors 
+
+```{r}
+dfa<-filter(df, Catheter == "nMARQ CIRCULAR", StopType!="Error",AblDuration>5, TimebetAbl<300,TimebetAbl>5, NumActElectrodes>0,AblationNum<=ceiling(quantile(dff$NumAbl,0.75)))
+```
+
+This leaves `r nrow(dfa)` ablations in the dataset.
+
+Time between events usually has exponential distribution. We can verify this by fitting exponential distribution to the time between ablations.
+```{r,fig.cap=fig$cap("tba", "Time between ablations", col="darkblue"), fig.align="center"}
+f<-fitdist(as.numeric(na.omit(dfa$TimebetAbl)-5),"exp")
+denscomp(f, addlegend = FALSE, main="Time between Ablations", xlab = "sec")
+```
+
+As we can see it is a good fit with mean equal to `r round(1/f$estimate+5,2)` sec.
+
+```{r}
+pander(quantile(dfa$TimebetAbl,c(0.01, 0.05,0.10, 0.25, 0.5,0.75, 0.9,0.95,0.99), na.rm=TRUE))
+```
+
+Ablation duration in nMARQ cases is expected to be limited to 60 seconds.
+```{r}
+pander(quantile(dfa$AblDuration,c(0.01, 0.05,0.10, 0.25, 0.5,0.75, 0.9,0.95,0.99), na.rm=TRUE))
+hist(dfa$AblDuration, main="Ablation Duration", xlab="sec")
+```
+
+Both time between ablations and ablation duration distributions are heavily affected by the specific workflows of the few sites with most of the data. 
+Specifically, we may suspect that Ablation Duration may have completely different distributions at different sites, where different physicians may have different preferences for how long ablation should last. 
+
+```{r, fig.width=10}
+tba<-dfa
+ag<-aggregate(cbind(TimebetAbl, AblDuration)~Hospital, data=tba, FUN=median)
+lh<-levels(tba$Hospital)
+tba$Hospital <- factor(tba$Hospital,levels = lh[order(ag$AblDuration)], ordered = T)
+
+g<-ggplot(tba, aes(x=AblDuration))
+g+   
+  geom_density(alpha=.3, fill="steelblue", adjust=0.8) + 
+  facet_wrap(~Hospital, ncol=7,scales="free_y")+
+  theme(legend.position="none")+
+  theme(axis.ticks.y = element_blank(),axis.text.y = element_blank())+
+  labs(title = "Ablation Duration")+
+  labs(x = "Ablation duration[sec]", y = "Probability Density Function")
+```
+
+
+It should be noted that the distributions in the graph include ablations of three types - ablations that reached full (preset) duration, ablations that were stopped by the user and ablations that stopped due to an error. 
+In the first case the preset durations are expected to have discrete values which are usually the multiples of 5, whereas in the latter two cases the duration values would have a continuous distribution. In the following table we show relative frequencies of the preset durations that are used in the field.
+
+```{r}
+pander(filter(tba, StopType=="FullDuration", Catheter=="nMARQ CIRCULAR") %>% mutate(AblDuration=round(AblDuration/5)*5) %>% count(AblDuration) %>% arrange(desc(n)) %>% mutate(Percent=percent(n/sum(n))))
+```
+
+The following graph places each hospital on a 2D map with Ablation Duration and Time between Ablations as the axes. 
+
+```{r, fig.height=7,fig.width=10}
+ggplot(ag, aes(x=AblDuration, y=TimebetAbl))+geom_label(aes(label=Hospital), fill="steelblue", alpha=0.5, size=3)+ labs(x="Median Ablation Duration [sec]", y="Median Time between Ablations [sec]")
+```
+
+The graph exposes significant differences between the hospitals. We may see that some physicians may have relatively intensive workflow with very short times between ablations, while others take more time to position a catheter and start next ablation (it would be interesting to investigate if time between ablations is shorter for more experienced physicians).
+
+As expected, we may notice that some physicians use a default setting of either 30 or (mainly) 60 seconds, while others may control ablation duration by (most likely) stopping ablation when desired effect is achieved (could be impedance drop, ECG reduction, etc...)
+
+In fact, we can analyze what portion of ablations is stopped by a physician vs ablations that reach final duration.
+```{r, fig.width=10, fig.height=8, fig.cap=fig$cap("stop_type", "Ablation Stop Reasons by Hospital", col="darkblue"), fig.align="center"} 
+dfe<-group_by(df,Hospital, StopType) %>% summarize(NumAbl=n()) %>% mutate(Percent=NumAbl/sum(NumAbl))
+dfe_wide<-dcast(dfe, Hospital~StopType, value.var="Percent")
+dfe_wide[is.na(dfe_wide)]<-0
+
+dfu<-filter(df, StopType!="Unspecified") %>% group_by(Hospital, StopType) %>% summarize(NumAbl=n()) %>% mutate(Percent=NumAbl/sum(NumAbl))
+dfu$Hospital<-factor(dfu$Hospital,levels = lh[order(filter(dfu,StopType=="FullDuration")$Percent)], ordered = T)
+
+ggplot(dfu, aes(x=Hospital, y = Percent ,fill=factor(StopType))) + geom_bar(stat='identity')+coord_flip()+
+     scale_fill_brewer(palette = "Paired",guide = guide_legend(title = NULL))+scale_y_continuous(labels=percent) + labs(x = "",y = "* Blue boxes refer to number of cases analyzed")+
+     geom_label(data=count(dfc,Hospital), aes(x=Hospital, y=1.05, label= n), size=3, fill="steelblue", color="white")
+
+c<-count(df,StopType) %>% mutate(Percent=n/sum(n))
+```
+
+This fascinating graph confirms the assumption above that some physicians proactively stop ablations whereas others allow ablations to reach their default (preset) duration. One of the additional observations is that the proportion of errors in each site also varies and thus we may speculate that some errors may also be a result of a clinical workflow. In particular, we may notice that `r dfe_wide$Hospital[which.max(dfe_wide$Error)]` site has more ablation errors than any other site. We will investigate this later in the [Errors & Failures Detection](#exploratory-analysis-iii---errors-failures-detection) section. 
+
+Note: In the graph above we have excluded `r percent(c$Percent[c$StopType=="Unspecified"])` ablations which do not have Ablation Stop Reason. It is missing in the original log file and thus it is not known whether these ablations had error or not. This issue is discussed in more depth in the [Errors & Failures Detection](#exploratory-analysis-iii---errors-failures-detection) section. 
+
+### Number of electrodes
+
+Number of electrodes used in ablation can be also a part of specific clinical workflow. 
+Below is the summary of number of electrodes used (in percents) across the entire dataset
+
+```{r}
+pander(round(prop.table(table(tba$NumActElectrodes))*100,1))
+```
+
+```{r, fig.height = 8, fig.width= 9, warning=FALSE}
+a<-with(dfa, table(Hospital, NumActElectrodes))
+a<-round(prop.table(a,1)*100,1)
+a<-as.data.frame(a)
+a<-mutate(a,freq.m=ifelse(Freq>0,Freq,NA))%>%group_by(Hospital)
+ggplot(a, aes(x=NumActElectrodes, y=reorder(Hospital, as.numeric(NumActElectrodes), FUN=median, na.rm=T)))+ geom_tile(aes(fill = Freq), colour = "darkgrey") + 
+     scale_fill_gradient(low = "white",high = "tomato3")+geom_text(aes(label=freq.m))+
+     labs(x = "Number of Active Electrodes", y = "")
+```
+
+
+## Exploratory Analysis II - Power, Temperature, Impedance
+
+### Dataset preparation 
+
+For brevity we will limit the discussion to unipolar ablations as the use of bipolar mode is very limited, as can be seen in the following table
+```{r}
+pander(count(df, AblMode)%>%mutate(Percent=percent(n/sum(n))))
+```
+
+Let's limit the dataset to a few power, temperature, impedance related parameters and also transform it to long format, such that the electrode number becomes a parameter.
+
+```{r, cache= TRUE}
+titles<-names(df)
+titles_ind<-grepl("^MaxTargetPower",titles) | grepl("^PowerMedian",titles) | grepl("^PowerAverage",titles) | grepl("^PowerSTD",titles) | 
+        grepl("^TargetTemp",titles)        | grepl("^TempMedian",titles) | grepl("^TempSlopeafterstartdegCsec", titles) | grepl("^TempSTD", titles) |  grepl("^Temp95", titles) | grepl("^TempMax", titles) | 
+        grepl("^ImpMin", titles) |  grepl("^Imp90", titles) | grepl("^ImpMax", titles) | grepl("^ImpMedian", titles) |  grepl("^TimetominImp", titles) | grepl("^ImpDrop", titles) |
+        grepl("^PRAON", titles) | grepl("^MinTargetPower", titles) | 
+        grepl("^ElectrodeEnergyJ", titles) | grepl("^EnergyEfficiency", titles) |  grepl("^IsActive", titles) 
+
+dff<-dplyr::select(df, Hospital, Case, Catheter, Date, AblStopReason, AblMode, AblDuration, AblationNum, which(titles_ind)) %>%
+     filter(Catheter == "nMARQ CIRCULAR", AblMode == "Unipolar") %>% dplyr::select(-Catheter, -AblMode) 
+dfz<- gather(dff, "variable", "value", -c(1:6)) %>% 
+     separate(variable, c("variable", "Electrode"), sep = "_") %>%
+     spread(variable, value)
+
+dfz$Electrode<-as.numeric(dfz$Electrode)
+dfz$EnergyEfficiency[dfz$EnergyEfficiency>100 | dfz$EnergyEfficiency<0] <-NA
+dfz<-filter(dfz,IsActive==TRUE,MaxTargetPower>=10) %>% dplyr::select(-IsActive)
+```
+We have also excluded from the dataset non active electrodes and ablations with target power less than 10W.
+Here is a random sample of the dataset we will be working with in this section.
+```{r}
+set.seed(2345)
+pander(t(sample_n(ungroup(dfz),1)))
+```
+
+### Power
+
+In this section we explore power settings and actual power delivered in nMARQ cases. 
+Let's see what target power settings are used in nMARQ cases.
+
+```{r}
+hist(dfz$MaxTargetPower, breaks = seq(9.5,25.5,1), freq=FALSE, main="Target Power Settings", xlab = "Target Power [W]")
+```
+
+```{r}
+pander(prop.table(table(dfz$MaxTargetPower))*100)
+```
+
+Since target power settings is a part of the clinical workflow, it may be also interesting to learn what settings are popular in each site. 
+
+```{r, fig.height = 8, fig.width= 9, warning=FALSE}
+a<-with(dfz, table(Hospital, MaxTargetPower))
+a<-round(prop.table(a,1)*100,1)
+a<-as.data.frame(a)
+a<-mutate(a,freq.m=ifelse(Freq>0,Freq,NA))
+ggplot(a, aes(MaxTargetPower, Hospital)) + geom_tile(aes(fill = Freq), colour = "darkgrey") + 
+     scale_fill_gradient(low = "white",high = "red")+geom_text(aes(label=freq.m))
+```
+
+We can see that 15W, 20W and 25W are the most commonly used, where EU-CH site physician prefers 18W and 16W settings.
+
+Let's see now how Target Power translates into the actual (average) power delivered to the tissue. 
+
+```{r, warning=FALSE, fig.width=10}
+dd<-filter(dfz,MaxTargetPower ==15 | MaxTargetPower ==20 | MaxTargetPower ==25 ) %>%
+     filter(PRAON==FALSE)
+g <- ggplot(dd, aes(factor(MaxTargetPower), PowerAverage)) +
+     geom_boxplot(fill="darkseagreen4")+ labs(x="Max Target Power [W]", y="Average Power [W]")
+
+gg <- ggplot(dd, aes(factor(MaxTargetPower), PowerSTD)) +
+     geom_boxplot(fill="steelblue")+ labs(x="Max Traget Power [W]", y="PowerSTD [W]")
+
+ggg <- ggplot(dd, aes(factor(MaxTargetPower), EnergyEfficiency)) + 
+     geom_boxplot(fill="firebrick")+ labs(x="Max Traget Power [W]", y="Energy Efficiency [%]")
+
+
+grid.arrange(g,gg,ggg, ncol=3)
+```
+
+```{r}
+pander(group_by(dd, MaxTargetPower)%>% summarize(AveragePower=mean(PowerAverage),StandardDeviationPower=mean(PowerSTD), EnergyEfficiencyPercent=mean(EnergyEfficiency, na.rm=TRUE)))
+```
+
+We can notice that at higher target power settings power fluctuates significantly (high standard deviation) and as a result average power is lower than expected. Another way to look at it is by evaluating energy efficiency which is a percentage of delivered energy with respect to the theoretical energy assuming constant power at target value after the ramp up time. We can see that at the higher power settings the generator has lower energy efficiency as compared to lower target power settings. For example, for target power of 25W, generator can only deliver ```r round(mean(dd$PowerAverage[dd$MaxTargetPower==25]),2)```W on average, and no more than ```r round(quantile(dd$PowerAverage[dd$MaxTargetPower==25],0.1),2)```W in the lowest 10% of the ablations. On the other hand, for 15W target power generator delivers ```r round(mean(dd$PowerAverage[dd$MaxTargetPower==15]),2)```W on average, and ```r round(quantile(dd$PowerAverage[dd$MaxTargetPower==15],0.1),2)```W in the lowest 10% of the ablations which is even slightly above the result for 25W. Below is the table that quantitatively compares average power delivered for 3 target power settings: 
+
+
+```{r}
+pander(group_by(dd, MaxTargetPower)%>% 
+            summarize("10%"=quantile(PowerAverage,0.1), "25%"=quantile(PowerAverage,0.25),
+                      "50%"=quantile(PowerAverage,0.5),"75%"=quantile(PowerAverage,0.75),
+                      "90%"=quantile(PowerAverage,0.9)))
+```
+
+###Temperature
+Let's perform similar exploratory analysis for temperature.
+```{r}
+pander(prop.table(table(dff$TargetTemp_1))*100)
+```
+
+Let's now take a look what target temperature settings are used at different sites.
+
+```{r, fig.height = 8, fig.width= 9, warning=FALSE}
+a<-with(dff, table(Hospital, TargetTemp_1))
+a<-round(prop.table(a,1)*100,1)
+a<-as.data.frame(a)
+a<-mutate(a,freq.m=ifelse(Freq>0,Freq,NA))
+ggplot(a, aes(TargetTemp_1, Hospital)) + geom_tile(aes(fill = Freq), colour = "darkgrey") + 
+     scale_fill_gradient(low = "white",high = "red")+geom_text(aes(label=freq.m))
+```
+
+This gives a much more informative picture. We can see that most of the sites use a recommended setting of 45$^{\circ}$C. However, the Austrian site seems to prefer 
+43$^{\circ}$C and the Czech site some of the time uses even lower setting of 40$^{\circ}$C.
+
+It might be also interesting to see how different temperature settings affect actual temperature at which ablations are performed. For a clearer picture we need to see it in conjunction with the power settings. 
+
+```{r}
+ddf<-filter(dd,TargetTemp ==40 | TargetTemp ==43 | TargetTemp ==45 )%>%
+     group_by(MaxTargetPower, TargetTemp) %>% summarize(AverageTemp95=mean(Temp95),AverageTempSTD=mean(TempSTD),AveragePower=mean(PowerAverage),AveragePowerSTD=mean(PowerSTD))
+pander(ddf, split.cells = 2)
+#g<-ggplot(ddf, aes(x=PowerAverage, y=TempMedian, color=as.factor(MaxTargetPower)))
+#g+geom_point(size=1,alpha = 0.2)+
+#  facet_wrap(~TargetTemp, ncol=3)+ 
+  #theme(legend.position="none")+
+#  labs(title = "nMARQ Cases")+
+#  labs(x = "Median Power [W]", y="Median Temperature [degC]")+ 
+#  theme(axis.title.x = element_text(size=10))+
+#  theme(axis.title.y = element_text(size=10))
+```
+
+We can see that 40$^{\circ}$C target temperature limits average power to no more than 15W regardless of the target power. In addition, at least on average there seems to be no significant difference between 43$^{\circ}$C and 45$^{\circ}$C settings. 
+
+### Impedance
+
+Let's look at the distribution of 0th(minimum), 50th (median), 90th and 100th(maximum) percentiles. 
+
+```{r, fig.width=9, warning=FALSE, comment=FALSE}
+dfi<-dplyr::select(dfz, ImpMin, ImpMedian, Imp90, ImpMax) %>% filter(ImpMax<300, ImpMin>40)
+pander(summary(dfi))
+dfi_long<-melt(dfi, id.vars = c(), value.name = "Impedance")
+ggplot(dfi_long, aes(x=Impedance, color=variable, fill=variable))+geom_density(alpha=0.4)+xlim(40,250)+
+     labs(title = "Impedance (Unipolar)")+labs(x = "Impedance [Ohm]", y="Density") 
+```
+
+We can see that that  the distributions of minimum, median and 90th percentile are relatively close to each other. However, the distribution of maximum impedance is shifted to the right. It reflects the effect of impedance drop which happens relatively fast such that even 90th percentile captures the impedance value after most of the impedance drop has already occurred. 
+
+In fact we may visualize impedance drop and the time it takes to reach minimum impedance (10th percentile) directly from the raw data.
+
+```{r,fig.width=10, warning = FALSE}
+g<-ggplot(dd,aes(x=ImpDrop, color=as.factor(MaxTargetPower), fill=as.factor(MaxTargetPower)))+
+     geom_density(alpha=0.4)+xlim(0,60)+
+     labs(title = "Impedance Drop (Unipolar)")+
+     labs(x = "Impedance [Ohm]", y="Density") 
+gg<-ggplot(dd,aes(x=TimetominImp, color=as.factor(MaxTargetPower), fill=as.factor(MaxTargetPower)))+
+     geom_density(alpha=0.4)+xlim(0,60)+
+     labs(title = "Time to minimum Impedance")+
+     labs(x = "Time [sec]", y="Density")
+grid.arrange(g,gg, ncol=2)
+```
+
+with median values given in the following table 
+```{r}
+ag<-aggregate(cbind(ImpDrop,TimetominImp)~MaxTargetPower, data=dd, FUN=median)
+pander(xtabs(cbind(ImpDrop,TimetominImp)~MaxTargetPower, data=ag))
+```
+
+Lumping it all together we may conclude that it roughly takes only `r round(median(dd$TimetominImp),1)`sec to achieve impedance drop
+of `r round(median(dd$ImpDrop),1)`Ohm. This confirms a previous conclusion regarding the fact that 90th percentile of impedance is 
+closer to the median and minimum impedance rather than to maximum impedance, because most of the impedance drop occurs roughly during first 10% of the ablation time.
+
+Let's now evaluate the effective impedance range for unipolar ablation.
+```{r}
+dfi_long<-filter(dfi_long,variable != "Imp90")  # exclude Imp90
+f<-fitdist(dfi_long$Impedance,"norm")
+denscomp(f, addlegend = FALSE, main="Impedance", xlab = "Ohm", xlim=c(0,250))
+```
+
+```{r}
+pander(f$estimate)
+pander(quantile(dfi_long$Impedance, c(0.01, 0.05,0.10, 0.25, 0.5,0.75, 0.9,0.95,0.99)))
+```
+
+We can conclude that in unipolar mode impedance is in the range between `r round(quantile(dfi_long$Impedance,0.01)/5)*5` and `r round(quantile(dfi_long$Impedance,0.99)/5)*5` Ohm.
+
+Let's see if there is any dependency of impedance on the electrode number (1 to 10).
+```{r, fig.width=9, warning=FALSE, comment=FALSE}
+dfi<-dplyr::select(dfz, Electrode,ImpMin, ImpMedian, ImpMax) %>% filter(ImpMax<300, ImpMin>40)
+dfi_long<-melt(dfi, id.vars = "Electrode", value.name = "Impedance")
+ggplot(dfi_long, aes(x=Impedance, color=factor(Electrode), fill=factor(Electrode)))+geom_density(alpha=0.4)+xlim(40,250)+
+     labs(title = "Impedance (Unipolar)")+labs(x = "Impedance [Ohm]", y="Density") 
+```
+
+We may notice that electrode 8 tends to measure slightly higher impedance than the rest of the electrodes. 
+
+```{r}
+ag<-aggregate(Impedance~Electrode, data=dfi_long, 
+               FUN=function(x) quantile(x,c(0.01, 0.5, 0.99)))
+pander(as.matrix(ag))
+```
+
+For completeness of the analysis (since it might be important for defining calibration requirements), below is the impedance analysis for the bipolar mode.
+
+```{r, cache = TRUE}
+dfb<-dplyr::select(df, Hospital, Case, Catheter, Date, AblStopReason, AblMode, AblDuration, AblationNum, which(titles_ind)) %>%
+     filter(Catheter == "nMARQ CIRCULAR", AblMode == "Bipolar",AblDuration>10) %>% dplyr::select(-Catheter, -AblMode) 
+dfzb<- gather(dfb, "variable", "value", -c(1:6)) %>% 
+     separate(variable, c("variable", "Electrode"), sep = "_") %>%
+     spread(variable, value)
+
+dfzb$Electrode<-as.numeric(dfzb$Electrode)
+dfzb$EnergyEfficiency[dfzb$EnergyEfficiency>100 | dfzb$EnergyEfficiency<0] <-NA
+dfzb<-filter(dfzb,IsActive==TRUE,MaxTargetPower>=10) %>% dplyr::select(-IsActive)
+```
+
+```{r, fig.width=9, warning=FALSE, comment=FALSE}
+dfib<-dplyr::select(dfzb, ImpMin, ImpMedian, Imp90, ImpMax) %>% filter(ImpMax<300, ImpMin>40)
+pander(summary(dfi))
+dfib_long<-melt(dfib, id.vars = c(), value.name = "Impedance")
+ggplot(dfib_long, aes(x=Impedance, color=variable, fill=variable))+geom_density(alpha=0.4)+xlim(40,300)+
+     labs(title = "Impedance (Bipolar)")+labs(x = "Impedance [Ohm]", y="Density") 
+```
+
+
+Looking at the graph above, it is impossible not to notice a small bell-shaped distribution to the left of the main bell curve.
+This does not seem to belong to the expected impedance range of the bipolar distribution and thus it is interesting (and maybe important) to understand the root cause of the low impedances in bipolar mode. See a separate investigation of this issue in Appendix I. Here we will simply exclude impedances below 100 ohm. 
+
+```{r}
+dfib_long<-filter(dfib_long,variable != "Imp90", Impedance >=100)  # exclude Imp90, exlude impedances less than 100Ohm
+f<-fitdist(dfib_long$Impedance,"norm")
+denscomp(f, addlegend = FALSE, main="Impedance (Bipolar)", xlab = "Ohm", xlim=c(0,250))
+```
+
+```{r}
+pander(f$estimate)
+pander(quantile(dfib_long$Impedance, c(0.01, 0.05,0.10, 0.25, 0.5,0.75, 0.9,0.95,0.99)))
+```
+
+We can conclude that in bipolar mode impedance is in the range between `r round(quantile(dfib_long$Impedance,0.01)/5)*5` and `r round(quantile(dfib_long$Impedance,0.99)/5)*5` Ohm.
+
+## Exploratory Analysis III - Errors & Failures Detection  
+
+nMARQ generator software implements a number of software errors which are displayed to a user in the case the system detects a specific fault condition. In such cases the ablation stops immediately or it does not start (if error is detected prior the ablation start). 
+
+Ablations that end with an error constitute `r percent(sum(df$StopType=="Error")/nrow(df))` of total number of ablations (`r sum(df$StopType=="Error")` out of `r nrow(df)`). Thus, analyzing statistics of system errors as a function of time in general and for each system in particular is a every important and relatively simple way to detect anomalies in the field. Detecting a change in the error rate may imply a possible change in the quality of disposables or systems (process change, defected batch of components used in manufacturing, etc...). Detecting a statistically  significant difference in the error rate in one site vs others may imply either a failure in a specific system or even a workflow related errors.
+
+### Errors Types
+
+In this section, the analysis will be limited to nMARQ catheter only. First let's see what kind of errors (or generator messages in general) we may encounter in our dataset. 
+
+```{r}
+dfer<-filter(df,Catheter=="nMARQ CIRCULAR") %>% mutate(ErrorType=gsub("[[:digit:]]+", "X",AblStopReason), ErrorElec=as.numeric(str_extract(AblStopReason, "[0-9]+"))) 
+b<-count(dfer, ErrorType)%>%mutate(Percent=percent(n/sum(n)))%>%arrange(desc(n))
+b$ErrorType[is.na(b$ErrorType)]<-"Unspecified"
+pander(b)
+```
+
+
+```{r}
+c<-filter(dfer,is.na(AblStopReason))
+```
+We may notice that in `r b$n[is.na(b$ErrorType)]` (`r b$Percent[is.na(b$ErrorType)]`) ablations, the ablation stop reason was not logged by a generator.
+At least `r sum(c$AblDuration>10 & c$NumActElectrodes>0, na.rm=TRUE)` of these ablations were longer than 10sec and with one or more active electrodes. Therefore, we may conclude that there might be a technical issue (bug?) in the generator SW that in some cases prevents creating a complete log file (Ablation Stop Reason is logged in the last line of the log file, and thus is likely to be missing if the logging stopped prematurely). 
+
+Let's see the distribution of Ablation Duration split by Ablation Stop Reason type.
+
+```{r, fig.width=7, warning=FALSE}
+g<-ggplot(dfer, aes(x=AblDuration, fill=StopType))+geom_density(alpha=0.4,adjust=0.8)+
+      labs(title = "Ablation Duration")+labs(x = "[sec]", y="Density") + scale_fill_brewer(palette = "Paired",guide = guide_legend(title = NULL))
+
+```
+
+
+By observing the graph and especially noting that none of the unspecified ablations has a duration of 60sec, we may speculate that the ablations with unspecified stop reason are a mix of Stopped and Error ablations. Let's verify this theory by plotting a distribution of Stopped and Error ablations as a single category.
+
+```{r, fig.width=7, warning=FALSE}
+dfem<-dfer
+dfem$StopType<-factor(ifelse(dfer$StopType=="Error" | dfer$StopType=="Stopped", "Stopped+Error", 
+                             ifelse (dfer$StopType=="FullDuration", "FullDuration", "Unspecified")),
+                      levels = c("FullDuration", "Stopped+Error", "Unspecified"))
+
+ggplot(dfem, aes(x=AblDuration, fill=StopType))+geom_density(alpha=0.4,adjust=0.8 )+
+      labs(title = "Ablation Duration")+labs(x = "[sec]", y="Density") + scale_fill_brewer(palette = "Paired",guide = guide_legend(title = NULL))
+```
+
+We can see that though not identical, but there is definitely a similarity between both distributions. Therefore, we should assume that the actual number of errors in nMARQ cases is higher than will be obtained by the analysis of the reported errors. 
+
+Note: Looking at the distribution of the Ablation Duration for ablations that reached full duration, one can wonder why the peaks around the "round" durations (such as 30, 40, 50, 60) are relatively wide. Indeed, we should expect to have very narrow peaks at these values. The answer is that the function that calculates a distribution performs smoothing such that the peaks look wider. It is possible to adjust the smoothing manually. 
+
+```{r}
+ggplot(dfem, aes(x=AblDuration, fill=StopType))+geom_density(alpha=0.4,adjust=0.1 )+
+      labs(title = "Ablation Duration")+labs(x = "[sec]", y="Density") + scale_fill_brewer(palette = "Paired",guide = guide_legend(title = NULL))
+```
+
+In this case though, it is more difficult to see wide distributions (since the density amplitudes become very low).
+
+### Errors Occurrence Rates
+
+As we have seen in `r fig$ref("stop_type", link=TRUE)`, some hospitals have more errors than others. 
+The graph below provides a clear picture
+
+```{r}
+ggplot(dfe_wide, aes(x=reorder(Hospital, Error), y = Error)) + geom_bar(stat='identity', fill="seagreen3")+
+     scale_y_continuous(labels=percent) + labs(title ="Errors Occurence Rate", x = "Hospital",y = "Errors Occurence Rate") +geom_label(data=count(dfc,Hospital), aes(x=Hospital, y=max(dfe_wide$Error)+0.01, label= n), size=3, fill="steelblue", color="white")+coord_flip()
+```
+Note: The numbers in blue boxes reflect number of cases analyzed in each site. 
+
+Let's understand now how different type of errors are distributed in each hospital as well as over time . If there is an error type that can be caused by a specific workflow, we should see that this error type appears more in some hospitals than the others. If there is an error type that is related to the change in product (such as catheter) quality, we may see time dependence across multiple hospitals. 
+
+```{r}
+min_err<-30
+```
+To make sure we obtain statistically reliable results, we will only analyze the hospitals which had at least `r min_err` errors.
+
+```{r, fig.width=10, fig.height=10, warning=FALSE}
+dfet1<-group_by(dfer, Hospital, ErrorType) %>% summarize(NumAbl=n()) %>% mutate(Percent=round(NumAbl/sum(NumAbl)*100,1)) %>% filter(!grepl("Ablation Stop",ErrorType) & !is.na(ErrorType)) %>% group_by(Hospital) %>% filter(sum(NumAbl)>=min_err)
+
+dfet1_wide<-dcast(dfet1, Hospital~ErrorType, value.var="Percent")
+dfet1<-melt(dfet1_wide,id.vars = "Hospital", variable.name = "ErrorType", value.name = "Percent1", na.rm=FALSE)
+
+
+
+dfet2<-filter(dfer, StopType=="Error") %>% group_by(Hospital, ErrorType) %>% summarize(NumAbl=n()) %>% filter(sum(NumAbl)>=min_err) %>% mutate(Percent=round(NumAbl/sum(NumAbl)*100,1))
+
+dfet2_wide<-dcast(dfet2, Hospital~ErrorType, value.var="Percent")
+dfet2<-melt(dfet2_wide,id.vars = "Hospital", variable.name = "ErrorType", value.name = "Percent2", na.rm=FALSE)
+
+dfet<-merge(dfet1, dfet2)
+
+g1<-ggplot(dfet, aes(reorder(ErrorType,Percent1, FUN=max,na.rm=TRUE), reorder(Hospital, as.numeric(Percent1), FUN=max, na.rm=T))) + geom_tile(aes(fill = Percent1), colour = "darkgrey") + scale_fill_gradient("Percent", low = "white",high = "red") + geom_text(aes(label=Percent1),color="grey25")+coord_flip()+
+     theme(axis.title.x=element_blank(),
+           axis.title.y=element_blank())+labs(title="Errors Percentage out of Total Number of ablations")
+
+
+g2<-ggplot(dfet, aes(reorder(ErrorType,Percent1, FUN=max,na.rm=TRUE), reorder(Hospital, as.numeric(Percent1), FUN=max, na.rm=T))) + geom_tile(aes(fill = Percent2), colour = "darkgrey") + scale_fill_gradient("Percent", low = "white",high = "red")+geom_text(aes(label=Percent2), color="grey25")+coord_flip()+theme(
+       axis.title.x=element_blank(),
+       axis.title.y=element_blank())+labs(title="Errors Percentage out of Total Number of Errors")
+
+grid.arrange(g1,g2,nrow=2)
+```
+
+We may notice a few interesting observations:
+
+1. All sites seem to have high amount of temperature related errors.
+2. EU-IT-2 site has significant and anomalous amount of **temperature too high** errors comprising `r percent(dfet$Percent1[dfet$Hospital=="EU-IT-2" & dfet$ErrorType=="Error - Electrode X - temperature is too high."]/100)` of all ablations performed at this site.
+3. EU-CH site has a relatively high and anomalous number of **system temperature is too high** errors (meaning that the system at this site is overheating) comprising `r percent(dfet$Percent2[dfet$Hospital=="EU-CH" & dfet$ErrorType=="Error - Generator console - system temperature is too high."]/100)` of all errors encountered at this site.
+<!-- 4. EU-DK  site has a relatively high number of **impedance is too low** errors comprising `r percent(dfet$Percent2[dfet$Hospital=="EU-DK" & dfet$ErrorType=="Error - Electrode X - impedance is too low."]/100)` of all errors encountered at this site. -->
+
+
+### Temperature errors
+
+Let's filter the dataset to leave only hospitals with at least 10 cases, and the cases with at least 10 ablations. 
+For each case we calculate the percentage of **temperature is too high**, **temperature is too low**  and **temperature is not decreasing** errors as well as all three errors combined and plot them as a function of time. 
+
+```{r, fig.width=10, fig.height=7,fig.cap=fig$cap("TempErrors", "Monthly occurrence rate of all temperature errors", col="darkblue"), fig.align="center"}
+dfer$Month<-cut(dfer$Date, breaks = "month")
+dfer$Month<-as.Date(dfer$Month)
+
+dttx<-filter(dfer, Hospital %in% dfet2$Hospital) %>% group_by(Hospital, Month) %>% 
+          summarize(Date=min(Date), 
+               NumAbl = sum(!is.na(AblDuration)), 
+               TempTooHigh = sum(ErrorType=="Error - Electrode X - temperature is too high.", na.rm=TRUE)/NumAbl,
+               TempTooLow  = sum(ErrorType=="Error - Electrode X - temperature is too low.", na.rm=TRUE)/NumAbl,
+               TempNotDecr = sum(ErrorType=="Error - Electrode X - temperature is not decreasing.", na.rm=TRUE)/NumAbl, TotalTempErrors=TempTooHigh+TempTooLow+TempNotDecr) %>% filter(NumAbl>20)
+
+
+
+gx<-ggplot(dttx, aes(x=Month, y=TotalTempErrors, color = Hospital)) +
+  #geom_smooth(aes(x=Month, y=ErrorRate,group = Catheter), lwd=1.4, color ="steelblue1")+
+  #geom_smooth(se=FALSE, color="black")+
+  geom_point(aes(size=NumAbl), alpha=0.7)+ 
+  scale_size_area(name="Number of Ablations",max_size = 8)+
+  theme(axis.title.y = element_blank(),axis.title.x = element_blank())+
+  labs(title = "Occurrence rate of all temperature errors")+
+  scale_y_continuous(labels = percent)+
+  guides(color = guide_legend(override.aes = list(size=6)))+
+  scale_color_brewer(palette="Paired")+
+  #scale_colour_manual(values=c("#3964C3", "#D34328"))#+
+  scale_x_date(date_breaks = "3 months", date_minor_breaks = "1 month", labels = date_format("%b %y"))
+
+gx
+#layout(data=gx, width=1000, height=900, margin=list(l=60, r=150, b=60, t=80, pad=0))
+
+```
+
+
+```{r, fig.width=10, fig.height=7,fig.cap=fig$cap("tth", "Monthly occurrence rate of temperature too high errors", col="darkblue"), fig.align="center"}
+gxtth<-ggplot(dttx, aes(x=Month, y=TempTooHigh, color = Hospital)) +
+  #geom_smooth(aes(x=Month, y=ErrorRate,group = Catheter), lwd=1.4, color ="steelblue1")+
+  #geom_smooth(se=FALSE, color="black")+
+  geom_point(aes(size=NumAbl), alpha=0.7)+ 
+  scale_size_area(name="Number of Ablations",max_size = 8)+
+  theme(axis.title.y = element_blank(),axis.title.x = element_blank())+
+  labs(title = "Occurrence rate of temperature too high errors")+
+  scale_y_continuous(labels = percent)+
+  guides(color = guide_legend(override.aes = list(size=6)))+
+  scale_color_brewer(palette="Paired")+
+  #scale_colour_manual(values=c("#3964C3", "#D34328"))#+
+  scale_x_date(date_breaks = "3 months", date_minor_breaks = "1 month", labels = date_format("%b %y"))
+
+gxtth
+#layout(data=gxtth, width=1000, height=900, margin=list(l=60, r=150, b=60, t=80, pad=0))
+
+```
+
+```{r, fig.width=10, fig.height=7,fig.cap=fig$cap("ttl", "Monthly occurrence rate of temperature too low errors", col="darkblue"), fig.align="center"}
+gxttl<-ggplot(dttx, aes(x=Month, y=TempTooLow, color = Hospital)) +
+  #geom_smooth(aes(x=Month, y=ErrorRate,group = Catheter), lwd=1.4, color ="steelblue1")+
+  #geom_smooth(se=FALSE, color="black")+
+  geom_point(aes(size=NumAbl), alpha=0.7)+ 
+  scale_size_area(name="Number of Ablations",max_size = 8)+
+  theme(axis.title.y = element_blank(),axis.title.x = element_blank())+
+  labs(title = "Occurrence rate of temperature too low errors")+
+  scale_y_continuous(labels = percent)+
+  guides(color = guide_legend(override.aes = list(size=6)))+
+  scale_color_brewer(palette="Paired")+
+  #scale_colour_manual(values=c("#3964C3", "#D34328"))#+
+  scale_x_date(date_breaks = "3 months", date_minor_breaks = "1 month", labels = date_format("%b %y"))
+
+gxttl
+
+#layout(data=gxttl, width=1000, height=900, margin=list(l=60, r=150, b=60, t=80, pad=0))
+
+```
+
+```{r, fig.width=10, fig.height=7,fig.cap=fig$cap("tnd", "Monthly occurrence rate of temperature not decreasing errors vs time", col="darkblue"), fig.align="center"}
+gxtnd<-ggplot(dttx, aes(x=Month, y=TempNotDecr, color = Hospital)) +
+  #geom_smooth(aes(x=Month, y=ErrorRate,group = Catheter), lwd=1.4, color ="steelblue1")+
+  #geom_smooth(se=FALSE, color="black")+
+  geom_point(aes(size=NumAbl), alpha=0.7)+ 
+  scale_size_area(name="Number of Ablations",max_size = 8)+
+  theme(axis.title.y = element_blank(),axis.title.x = element_blank())+
+  labs(title = "Occurrence rate of temperature not decreasing errors")+
+  scale_y_continuous(labels = percent)+
+  guides(color = guide_legend(override.aes = list(size=6)))+
+  scale_color_brewer(palette="Paired")+
+  #scale_colour_manual(values=c("#3964C3", "#D34328"))#+
+  scale_x_date(date_breaks = "3 months", date_minor_breaks = "1 month", labels = date_format("%b %y"))
+
+gxtnd
+
+#layout(data=gxtnd, width=1000, height=900, margin=list(l=60, r=150, b=60, t=80, pad=0))
+
+```
+
+The graphs indicate that the EU-IT-2 site has a consistent (over time) abnormally high rate of the temperature too high errors. This implies that this site may have a unique workflow (i.e. catheter application method) that causes electrode temperature to rise. Another option is that there could be a problem with the generator causing this abnormal behavior. 
+
+We also notice an increasing temperature error rate starting from Feb 2015. Prior investigations have indicated thermocouple failures in the GEN2 nMARQ catheter. These failures are associated with abnormally low electrode temperature or unstable temperature caused by activation of RF power. 
+
+Further analysis is shown on the scatter plot below. The graph plots a median electrode temperature vs temperature slope during the initial power ramp up in the first few seconds of the ablation. 
+
+
+```{r, fig.width=10, fig.height=8}
+dfzz<-filter(dfz, TargetTemp==45, PowerMedian>10)%>%
+mutate(Catheter=ifelse(Date<as.Date("2015-03-01"), "Gen 1", "Gen 2"))%>% arrange(desc(Date))
+L<-sum(dfzz$Catheter=="Gen 2")
+
+dfzz<- group_by(dfzz,Catheter) %>% do(head(., L))
+
+#theme_set(theme_gray(base_size = 30))
+g<-ggplot(dfzz, aes(y=TempMedian, x=TempSlopeafterstartdegCsec, color=PowerMedian,size=AblDuration))
+g+geom_point(alpha=0.4, shape=20)+scale_color_gradient(low="blue", high="red", name = "Median Power") + 
+facet_grid(. ~ Catheter)+scale_size_area(name="Ablation Duration",max_size = 3)+
+labs(x="Temperature Slope during Power Ramp Up [deg C/sec]", y="Median Temperature [deg C]")
+```
+The temperature anomalies can be identified as the points with negative temperature slope and low median temperature (<30deg C). The graph also implies that the the bad thermocouples do not necessarily lead to software errors, but could remain unnoticed by physicians if the electrode  temperature remained within the 18-60 deg range.
+
+### EU-IT-2 Temperature Too High Error Investigation
+
+The following graph shows the distribution of the temperature too high (TTH) error across 10 electrodes as compared to the general utilization of electrodes at this site.  
+
+```{r, fig.width=10}
+grer<-filter(dfer, Hospital=="EU-IT-2", ErrorType=="Error - Electrode X - temperature is too high.")
+grall<-filter(dfz, Hospital=="EU-IT-2")
+
+q1<-qplot(as.factor(grer$ErrorElec), xlab="Electrode", ylab="", main="Temperature Too High Errors at EU-IT-2")
+q2<-qplot(as.factor(grall$Electrode), xlab="Electrode", ylab="", main="Utilization of Electodes at EU-IT-2")
+grid.arrange(q2, q1, ncol = 2)
+```
+
+We can observe that TTH errors occur at all electrodes with electrodes 3-6 having a higher probability of error. Even though these electrodes are most frequently used by a physician, it seems (at least visually) that the relative frequency of errors in these electrodes is still higher than the relative frequency of their usage. 
+
+However, the spread of the errors across all electrodes imply that there is no specific failure in the generator (such as a failure of a specific channel), that can explain the failures. Therefore, we tend to agree with the clinical assessment that the errors may be a result of a specific handling of a catheter by the physician. 
+
+Let's also take a look at the duration of the ablations that were stopped due to the TTH errors, as well as the maximum temperature during the ablations with TTH errors.
+
+
+```{r}
+titles_ind<- grepl("^Temp95",titles) | grepl("^TempMax",titles) | grepl("^TempMedian",titles) | grepl("^TempSTD", titles) | grepl("^MaxTargetPower",titles)  | grepl("^PowerMedian",titles) | grepl("^PowerSTD",titles) | grepl("^TempSlopeafterstartdegCsec", titles)  | grepl("^IsActive",titles) | grepl("^ImpMin", titles) |  grepl("^Imp90", titles) | grepl("^ImpMax", titles) | grepl("^ImpMedian", titles) |  grepl("^TimetominImp", titles) | grepl("^ImpDrop", titles) 
+
+grdff<-filter(df, Catheter == "nMARQ CIRCULAR", AblMode == "Unipolar") %>% dplyr::select(Hospital, Case, StopType, AblStopReason, AblDuration, AblationNum, StopType, which(titles_ind)) %>%
+     mutate(ErrorType=gsub("[[:digit:]]+", "X",AblStopReason), ErrorElec=as.numeric(str_extract(AblStopReason, "[0-9]+"))) %>%     dplyr::select(-AblStopReason) %>%filter(Hospital=="EU-IT-2") %>% 
+     dplyr::select(c(1:5,156, 157, 6:155))
+
+
+grdfz<- gather(grdff, "variable", "value", -c(1:7)) %>% 
+     separate(variable, c("variable", "Electrode"), sep = "_") %>%
+     spread(variable, value)
+
+grdfz$Electrode<-as.numeric(grdfz$Electrode)
+grdfz$IsActive<-grdfz$MaxTargetPower>5
+grdfz<-filter(grdfz,IsActive==TRUE) %>% dplyr::select(-IsActive)
+
+
+#dnoerr<-filter(grdfz, StopType!="Error", StopType!="Unspecified" )
+#dtth<-  filter(grdfz, ErrorType=="Error - Electrode X - temperature is too high.", ErrorElec==Electrode )
+
+grdfz<-mutate(grdfz, isTTH=ifelse(ErrorType=="Error - Electrode X - temperature is too high." & ErrorElec==Electrode , T, ifelse(StopType!="Error" & StopType!="Unspecified", F, NA)))%>% filter(!is.na(isTTH))
+
+grdfz$isTTH<-factor(grdfz$isTTH,labels=c("No Errors","TTH Error") )
+
+```
+
+
+```{r, fig.width=10}
+ggplot(data = grdfz, aes(x=AblDuration,fill=isTTH))+
+geom_density(alpha=0.4,adjust=0.5)+
+labs(title = "Ablations Duration at EU-IT-2 site")+
+labs(y="Density")+
+labs(x="Ablation Duration [sec]")+scale_fill_discrete(name="Ablations with")
+```
+
+```{r, fig.width=10}
+ggplot(data = grdfz, aes(x=TempMax,fill=isTTH))+
+geom_density(alpha=0.4,adjust=0.8)+
+labs(title = "Maximum Electrode Temperature at EU-IT-2 site")+
+labs(y="Density")+
+labs(x="Temperature [deg C]")+scale_fill_discrete(name="Ablations with")
+```
+
+
+From the duration graph we can notice that the duration of ablations that had TTH error is slightly shorter than the duration of normal ablations, but the distribution is generally similar. This means that there is no temporal factor involved in generating the error and it may happen at any time during the application of RF.
+
+The graph of maximum electrode temperature suggests that the temperature change resulting in TTH error happens in most cases very fast. The reason for this conclusion is that the TTH error is issued by the generator software when the instantaneous temperature reaches 60deg C. However, we see that in most cases the maximum temperature of ablations with TTH error is actually below 60 deg C. This is due to the fact that the generator records a temperature averaged over last 9 samples taken at 66ms intervals. If we assume that the temperature change is instantaneous then only one out of 9 samples is affected and the recorded temperature will only rise by  approximately (60-45)/9= 1.7 deg C, which is more or less the difference we see between the peaks of both distributions. 
+
+To confirm this conclusion, let's redraw the last graph, but instead of maximum temperature, we shall plot 95th percentile of the temperature.
+
+```{r, fig.width=10}
+ggplot(data = grdfz, aes(x=Temp95,fill=isTTH))+
+geom_density(alpha=0.4,adjust=0.8)+
+labs(title = "95th Percentile Electrode Temperature at EU-IT-2 site")+
+labs(y="Density")+
+labs(x="Temperature [deg C]")+ scale_fill_discrete(name="Ablations with")
+```
+
+We notice that the peaks of the distributions now overlap, suggesting that there is no significant difference in 95th percentile of the temperature between normal ablations and the ablations with TTH error. This confirms that the temperature change resulting in TTH error occurs very fast. 
+
+### EU-CH System Temperature Investigation
+
+In the previous sections we have showed that the physician at EU-CH site performs ablations with median duration of 60sec and median time between ablations of about 30sec. This relatively aggressive workflow causes the RF generator to overheat and sometimes reach the system temperature limit which was initially set to 75 deg C and later on was changed to 85deg C.
+
+In the following graph we plot Maximum System Temperature achieved during the case as a function of equivalent power delivered since the beginning of the case.
+Her the equivalent power is defined as a total energy delivered in all ablations before the maximum system temperature was reached divided by the time it took to reach it (this time will be a sum of all ablations, time between ablations and preablation time).
+
+```{r, fig.width=10}
+
+dst<-filter(df, complete.cases(MaxSystemTemp)) %>% filter(TimebetAbl<400, AblationNum<=25) %>% group_by(Hospital, Case) %>% filter(Catheter == "nMARQ CIRCULAR") %>% mutate(TimeToN=cumsum(TimebetAbl+AblDuration), TotalEnergy=cumsum(TotalEnergyJ))%>% filter(AblationNum==which.max(MaxSystemTemp)) %>% dplyr::select(Hospital, Case, Date,MaxSystemTemp,TimeToN, AblationNum, TotalEnergy) %>% mutate(EquivalentPower=TotalEnergy/TimeToN)%>% group_by(Hospital) %>% mutate(isCH=ifelse(Hospital=="EU-CH", "EU-CH", "Others"))
+
+ggplot(dst, aes(x=EquivalentPower, y=MaxSystemTemp)) + geom_point(aes(size=AblationNum, color=factor(isCH)),alpha=0.6)+ scale_color_brewer(name="Hospital", palette = "Set1")+geom_smooth(method="lm", se=FALSE,linetype=2)
+```
+
+In this graph, the cases corresponding to EU-CH site are shown in red. We can clearly see that maximum system temperature is correlated with Equivalent Power as defined above with the cases performed at EU-CH site lying in high power-high system temperature zone of the regression line.
+
+
+The following graph shows maximum system temperature at EU-CH site as a function of Date.
+
+```{r, fig.width=8}
+a<-filter(dst, isCH=="EU-CH")
+
+ggplot(a, aes(x=Date, y=MaxSystemTemp))+geom_point(aes(color=EquivalentPower),size=4,alpha=0.9)+scale_x_date(date_breaks = "3 months", date_minor_breaks = "1 month", labels = date_format("%b %Y"))+scale_color_gradient(low="deepskyblue", high="tomato", name = "Equivalent Power")+xlab("")+ylab("Maximum System Temperature")
+```
+We may notice that after May 2014 the maximum system temperature is allowed to go above 75deg C. This is when the system limit was changed to 85deg C. Since the change, there were only two cases when the system temperature reached the new limit implying that the change was effective in allowing a physician to perform procedures uninterrupted due to overheating of the system. 
+
+In the next plot we show at what ablation number the  maximum system temperature is reached
+
+```{r, fig.width =8}
+ggplot(a, aes(x=AblationNum,y=MaxSystemTemp))+geom_point(aes(color=EquivalentPower),size=4,alpha=0.7)+scale_color_gradient(low="deepskyblue", high="tomato", name = "Equivalent Power")+xlab("Ablation Number")+ylab("Maximum System Temperature")
+```
+
+We may conclude that the maximum system temperature is usually reached in the first  `r round(quantile(a$AblationNum,0.05))` - `r round(quantile(a$AblationNum,0.95))` ablations.
+
+
+```{r}
+### EU-DK Impedance too low Investigation
+grer<-filter(dfer, Hospital=="EU-DK", ErrorType=="Error - Electrode X - impedance is too low.")
+grall<-filter(dfz, Hospital=="EU-DK")
+
+# q1<-qplot(as.factor(grer$ErrorElec), xlab="Electrode", ylab="", main="ITL Errors at EU-DK")
+# q2<-qplot(as.factor(grall$Electrode), xlab="Electrode", ylab="", main="Utilization of Electodes at EU-DK")
+# grid.arrange(q2, q1, ncol = 2)
+```
+
+# Conclusions
+
+The performed work demonstrates the value and potential of data mining from large clinical datasets generated by medical devices in the field. 
+
+The most interesting and eventually most important part, which is yet to be done, is to overlay the clinical outcomes in terms of efficacy and safety on top of the workflow data. Establishing correlations between the workflow and the corresponding clinical outcomes will help to identify more successful workflows as well as less successful ones. This knowledge, shared within the medical community, will help develop better treatment strategies and improve overall efficacy and safety of the treatment. 
+
+In the future, when medical devices become network connected, it will be possible to monitor trends in product use and identify possible failures in the devices or disposables in almost real time allowing to address such issues quickly and efficiently. 
+
+# Appendices
+
+## Appendix I - Bipolar mode impedance investigation
+
+First, let's fit to data a decision tree model to identify which parameters are predictors of the impedance difference. 
+For classification, we create a new variable 'ImpClass' which will split the data into 2 classes - below 100 Ohm and above 100ohm.
+
+```{r}
+dfzb$ImpClass<-ifelse(dfzb$Imp90<100,"Imp_below100", "Imp_above100")  
+pander(count(dfzb, ImpClass))
+```
+We have `r percent(sum(dfzb$ImpClass=="Imp_below100")/nrow(dfzb))` of "misbehaving" data.
+
+Now we train a tree model using temperature and power parameters as possible predictors:
+```{r}
+tree<-train(ImpClass~TempMedian+Temp95+TargetTemp+MaxTargetPower+PowerAverage,dfzb[,5:28],method = "rpart")
+fancyRpartPlot(tree$finalModel)
+```
+
+The obtained model is surprisingly simple. If 95th percentile of the temperature is above 29 deg, then the model predicts that the 90th percentile impedance will be above 100ohm, if the temperature is below 29 deg, then the impedance is below 100ohm...
+
+Let's verify this model.
+
+```{r}
+p <- predict(tree,dfzb[,5:28])
+confusionMatrix(p,dfzb[,5:28]$ImpClass)
+```
+The accuracy is 99.5%.
+
+```{r}
+ag<-aggregate(Temp95~ImpClass, data=dfzb, summary)
+pander(xtabs(Temp95~ImpClass, data=ag))
+```
+
+Finally, we can plot distributions of impedance (90th percentile) as a function of temperature class (95th percentile) and also
+temperature vs impedance class. 
+
+```{r,fig.width = 10}
+dfzb$TempClass<-ifelse(dfzb$Temp95>=29, "Temp_above29", "Temp_below29")
+gi<-ggplot(dfzb, aes(x=Imp90, color = TempClass, fill=TempClass))+geom_density(alpha=0.6, adjust=1.5)+xlim(40,300)+
+     labs(title = "Impedance (Bipolar) vs TempClass")+labs(x = "Impedance [Ohm]", y="Density")
+gt<-ggplot(dfzb, aes(x=Temp95, color = ImpClass, fill=ImpClass))+geom_density(alpha=0.6, adjust=1)+
+     labs(title = "Temperature vs ImpClass")+labs(x = "Temperature[degC]", y="Density")
+grid.arrange(gi,gt, ncol=2)
+```
+
+Let's see now when these cases happened. 
+```{r,fig.width = 9}
+ggplot(dfzb, aes(x=Date, fill=ImpClass))+geom_histogram(position="stack", binwidth=20, alpha=0.5) 
+```
+
+Let's also check where it happened. 
+```{r}
+pander(filter(dfzb,ImpClass=="Imp_below100") %>% group_by(Hospital,Case) %>% summarize(NumofAblations=n_distinct(AblationNum), NumofElec=n()))
+```
+
+The next step would be to analyze the specific cases that were identified in the table above (currently is out of scope for this report). 
+
+
+```{r,fig.width = 10}
+
+dfaa<-filter(df, Catheter == "nMARQ CIRCULAR", StopType!="Error",AblDuration>5, TimebetAbl<300,TimebetAbl>5, NumActElectrodes>0)
+a<-group_by(dfaa, Hospital, Case)%>% summarize(MedianDuration=median(AblDuration), MedianTimebetAbl=median(TimebetAbl), NumofAbl=n(), TotalRF=sum(AblDuration)/60)%>%filter(TotalRF>5, TotalRF<45)
+aa<-group_by(a, Hospital)%>% filter(n()>25)
+
+# g<-ggplot(aa,aes(x=MedianDuration,y=MedianTimebetAbl, color=Hospital))
+# g+geom_point(aes(size=NumofAbl), alpha=0.5)+scale_size_area(name="Number of Ablations",max_size = 10, breaks = c(10, 20, 30, 40, 50, 60, 70), labels = c(10, 20, 30, 40, 50, 60, 70))+scale_color_brewer(palette = "Set1")
+# 
+# plot_ly(aa,x=MedianDuration, y=MedianTimebetAbl, z=NumofAbl, text=paste("Case: ",Case), type="scatter3d",mode="markers", color=factor(Hospital), colors="Set1", size=TotalRF)
+# 
+# layout(width=1000, height=900)
+```
+

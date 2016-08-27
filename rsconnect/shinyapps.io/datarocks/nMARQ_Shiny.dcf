@@ -1,0 +1,10 @@
+name: nMARQ_Shiny
+account: datarocks
+server: shinyapps.io
+appId: 121480
+bundleId: 539859
+url: https://datarocks.shinyapps.io/nMARQ_Shiny/
+when: 1472055302.43806
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: nMARQ.Rmd|read_log_file.R|server1.R
