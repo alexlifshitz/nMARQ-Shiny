@@ -60,7 +60,7 @@ read_log_file <- function(path) {
           Abl@StopReason<-trimws(str_split(footer,"\t")[[1]][2])
      }else{
           body<-lines[(n_header+1):length(lines)]
-          Abl@StopReason<-NA
+          Abl@StopReason<-"Unspecified"
      }
      
      
@@ -135,7 +135,7 @@ abl_summary <- function(Abl){
                      StopReason=Abl@StopReason
                      )
      
-     S<-S[rep(1,Abl@ElecNum),]
+     S<-S[rep(1,Abl@ElecNum),] 
      
      
      # Mode="character",

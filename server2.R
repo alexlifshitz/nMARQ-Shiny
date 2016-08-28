@@ -1,15 +1,11 @@
 library(shiny)
 library(plotly)
 library(stringr)
-library(stringi)
 library(dplyr)
 library(tidyr)
-library(gtools)
 library(ggplot2)
 
 source('functions.R')
-
-Ablation<-NULL
 
 shinyServer(function(input, output, session) {
      
@@ -27,51 +23,39 @@ shinyServer(function(input, output, session) {
                     
                     # update the widget value
                     updateDirectoryInput(session, 'directory', value = path)
-                    files <- list.files(readDirectoryInput(session, 'directory'), full.names = T, pattern=".*ABL.*txt")
-                    files <-mixedsort(files)
-                    
-                    updateSelectInput(session, "file", choices=basename(files))
-                    
                }
           }
      )
      
-     get_ablation_data<-eventReactive(input$file,
-          
-                                      valueExpr = {
-               if (input$file > 0) {
-                    files <- list.files(readDirectoryInput(session, 'directory'), full.names = T, pattern=".*ABL.*txt")
-                    files <-mixedsort(files)
-                    # condition prevents handler execution on initial app launch
-                    ablation_file = files[stri_endswith_fixed(files, input$file)]
-                    Ablation<-read_log_file(ablation_file)
-                    return(Ablation)
-               }
-
-          }
-     )
- 
-          
+     
+     output$directory = renderText({
+          readDirectoryInput(session, 'directory')
+     })
+     
+     
      observe({
-          Ablation <- get_ablation_data()
-          if (is.null(Ablation)) {
-                return(NULL)
+          ablation_file = input$file
+          if (is.null(ablation_file)) {
+               return(NULL)
           }
           
-          
+          Ablation<-read_log_file(ablation_file$datapath)
+       
           output$ParamPlot <- renderPlotly({
-          g<-ggplot(Ablation@Data, aes_string(x="Time", y=names(Ablation@Data)[as.numeric(input$param)], color="Electrode"))+
-               geom_line()+labs(title = sprintf("Ablation #%d %s %s", Ablation@AblNum, Ablation@Catheter, Ablation@Mode)) + 
-               xlab("Time [sec]")+ylab(names(Ablation@Data)[as.numeric(input$param)])+xlim(-5, Ablation@MaxDuration)
-          ggplotly(g)
+               g<-ggplot(Ablation@Data, aes_string(x="Time", y=names(Ablation@Data)[as.numeric(input$param)], color="Electrode"))+
+                    geom_line()+labs(title = sprintf("Ablation #%d %s %s", Ablation@AblNum, Ablation@Catheter, Ablation@Mode)) + 
+                    xlab("Time [sec]")+ylab(names(Ablation@Data)[as.numeric(input$param)])+xlim(-5, Ablation@MaxDuration)
+               ggplotly(g)
+               
+               #plot_ly(dfz, x = Time, y = Temp,color = as.ordered(Electrode))
           })
           
-          df<-filter(Ablation@Data,Electrode==input$elec)
           
+          df<-filter(Ablation@Data,Electrode==input$elec)
           a <- list(
-               x = Ablation@MaxDuration,
+               x = -5,
                y = max(c(df$Temp,df$Pow))*1.03,
-               xanchor = "right",
+               xanchor = "left",
                text = Ablation@StopReason,
                xref = "x",
                yref = "y",
@@ -97,9 +81,9 @@ shinyServer(function(input, output, session) {
                               line = list(color = toRGB("green")),hoverinfo="text", text=paste("Time:", Time, "<br>", "Imp: ", Imp)) %>%
                     add_trace(x = Time, y = TempT, name = "TempT", showlegend=F,mode = "lines", line = list(color = toRGB("blue"), dash="5px"), hoverinfo = "none")%>% 
                     add_trace(x = Time, y = PowT, name = "PowT", showlegend=F,mode = "lines", line = list(color = toRGB("red"), dash="5px"),hoverinfo = "none") %>%
-                    layout(title = sprintf("Ablation #%d: Electrode %s  (Catheter: %s %s)", Ablation@AblNum, input$elec, Ablation@Catheter, Ablation@Mode), 
+                    layout(title = sprintf("Ablation #%d %s %s", Ablation@AblNum, Ablation@Catheter, Ablation@Mode), 
                            yaxis2 = list(title="Impedance [Ohm]",overlaying = "y",side = "right",
-                                         range = c(min(df$Imp)*0.95, max(df$Imp)*1.05), autotick = F, tick0=0, dtick=max(1,ceiling((max(df$Imp)-min(df$Imp))/10)), ticks = "outside",showgrid=F, showline=T,zeroline=F),
+                                         range = c(0, max(df$Imp)*1.05), autotick = F, tick0=0, dtick=10, ticks = "outside",showgrid=F, showline=T,zeroline=F),
                            xaxis = list(title = "Time [sec]", range = c(-5, Ablation@MaxDuration), autorange = F,autotick = F, tick0 = -5, dtick = 5, ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
                            yaxis=list(title="Power [W]/Temperature [deg C]", range = c(0, max(c(df$Temp,df$Pow))*1.05), autotick = F, tick0 = 0, dtick = 5, ticks = "outside",showline=T,zeroline=F,gridcolor = toRGB("gray80")),
                            annotations=a, margin=m, legend=list(x=1.05, orientation="v")
