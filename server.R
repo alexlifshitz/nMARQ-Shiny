@@ -9,12 +9,13 @@ library(ggplot2)
 
 source('functions.R')
 
-Ablation<-NULL
+Ablations<-NULL
+files<-NULL
 
 shinyServer(function(input, output, session) {
      
      observeEvent(
-          ignoreNULL = TRUE,
+          ignoreNULL = T,
           eventExpr = {
                input$directory
           },
@@ -27,32 +28,69 @@ shinyServer(function(input, output, session) {
                     
                     # update the widget value
                     updateDirectoryInput(session, 'directory', value = path)
-                    files <- list.files(readDirectoryInput(session, 'directory'), full.names = T, pattern=".*ABL.*txt")
-                    files <-mixedsort(files)
+                    
+                    #files <<- list.files(readDirectoryInput(session, 'directory'), full.names = T, pattern=".*ABL.*txt")
+                    files <<- list.files(path, full.names = T, pattern=".*ABL.*txt")
+                    files <<- mixedsort(files)
                     
                     updateSelectInput(session, "file", choices=basename(files))
-                    
+                    output$load_case <- renderUI({
+                         actionButton("action", label = "Process Case Data")
+                    })
+                    #Ablations<<-read_all_ablations(files)
+                    Ablations<<-NULL
                }
           }
      )
      
-     get_ablation_data<-eventReactive(input$file,
-          
-                                      valueExpr = {
+     get_ablation_data<-eventReactive(input$file, valueExpr = {
                if (input$file > 0) {
-                    files <- list.files(readDirectoryInput(session, 'directory'), full.names = T, pattern=".*ABL.*txt")
-                    files <-mixedsort(files)
-                    # condition prevents handler execution on initial app launch
+                    
                     ablation_file = files[stri_endswith_fixed(files, input$file)]
                     Ablation<-read_log_file(ablation_file)
+                    updateSelectInput(session, "elec", choices=1:Ablation@ElecNum)
                     return(Ablation)
                }
 
           }
      )
- 
-          
+     
+     
+     load_case <- eventReactive(input$action, {
+          if (is.null(Ablations)){
+               
+               Ablations<<-read_all_ablations(files)
+               output$load_case <- renderUI({
+                    actionButton("action", label = "Done")
+               })
+               
+          }
+          return(Ablations)
+     })
+     
+    
+     
      observe({
+          load_case()
+          dfs<-dplyr::select(Ablations, AblNum, Electrode, Pow, Temp, Imp) %>% group_by(AblNum, Electrode) %>%
+               summarize_each_(funs_("mean"),c("Pow"))
+     
+          output$CasePlot <- renderPlotly({
+               # g<-ggplot(dfs, aes(x=AblNum, y=Pow, color=Electrode))+geom_point(size=3, alpha=0.5)
+               # ggplotly(g)  
+               plot_ly(dfs, x=AblNum, y=Pow, mode = "markers", color = Electrode)
+          })
+          
+          
+          
+     })
+     
+     
+     
+     
+     
+     observe({
+             
           Ablation <- get_ablation_data()
           if (is.null(Ablation)) {
                 return(NULL)
@@ -105,14 +143,7 @@ shinyServer(function(input, output, session) {
                            annotations=a, margin=m, legend=list(x=1.05, orientation="v")
                            ) 
           })
-          
-          # dfs<-dplyr::select(dfz,c(1,2,3,5,6))
-          # output$view <- renderGvis({
-          #      Motion=gvisMotionChart(dfs, 
-          #                             idvar="Electrode", 
-          #                             timevar="Time")
-          #      plot(Motion)
-          # })
+         
      })
      
 })

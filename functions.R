@@ -16,10 +16,39 @@ setClass(Class="ablation",
               MaxDuration="numeric",
               ElecNum="numeric",
               StopReason="character",
+              Annotation="character",
               Data="data.frame"
          )
 )
 
+read_all_ablations<-function(files){
+     
+     #files <- list.files(path, full.names = T, pattern=".*ABL.*txt")
+     
+     dfs<-NULL
+     for (file in files){
+          print(file)
+          Abl<-read_log_file(file)
+          df<-Abl@Data
+          S <- data.frame(AblNum=as.factor(Abl@AblNum), 
+                          Date=Abl@Date, 
+                          #SW_version=Abl@SW_version,
+                          #HW_version=Abl@HW_version,
+                          MaxDuration=Abl@MaxDuration, 
+                          #AblDuration=Abl@Data$Time[nrow(Abl@Data)],
+                          #PreAblTime=Abl@Data$Time[1],
+                          Catheter=Abl@Catheter,
+                          AblMode=Abl@Mode,
+                          StopReason=Abl@StopReason
+                          #Annotation=Abl@Annotation
+          )
+          
+          S<-S[rep(1,nrow(df)),] 
+          dfs<-rbind(dfs, cbind(S, df))
+     }
+     return(dfs)
+     
+}
 
 read_log_file <- function(path) {
      
@@ -55,7 +84,7 @@ read_log_file <- function(path) {
      
      footer<-lines[length(lines)]
      
-     if (grepl("Ablation", footer)){
+     if (grepl("Ablation", footer) | grepl("Error", footer)){
           body<-lines[(n_header+1):(length(lines)-1)]
           Abl@StopReason<-trimws(str_split(footer,"\t")[[1]][2])
      }else{
@@ -63,6 +92,7 @@ read_log_file <- function(path) {
           Abl@StopReason<-"Unspecified"
      }
      
+     Abl@Annotation=""
      
      s<-header[6]
      n_elec<-str_count(s,"\\|")
@@ -76,9 +106,31 @@ read_log_file <- function(path) {
      n_params=(length(titles)-1)/n_elec
      titles_single<-titles[1+1:n_params]
      
-     for (k in c(1:n_elec)){
-          titles[1+(k-1)*n_elec+1:n_elec]<-paste(titles[1+(k-1)*n_elec+1:n_elec],k,sep= "_")
+     isdup<-duplicated(titles_single)
+     dup<-unique(titles_single[isdup])
+     
+     if (any(isdup)){
+          for (d in dup){
+               ind<-which(titles_single==d)
+               for (k in 1:length(ind)){
+                    titles_single[ind[k]]<-paste0(titles_single[ind[k]],k)
+               }
+          }
+          
      }
+     
+     titles<-rep(titles_single,n_elec)
+     
+     for (k in c(1:n_elec)){
+          titles[(k-1)*n_elec+1:n_elec]<-paste(titles[(k-1)*n_elec+1:n_elec],k,sep= "_")
+     }
+     
+     titles<-c("Time",titles)
+     
+   
+     #d<-as.data.frame(setNames(replicate(length(titles),numeric(0), simplify = F), titles))
+     #d<-cbind(data.frame(TS=character(), stringsAsFactors = F), d)
+     ts<-NULL
      
      
      m<-matrix(NA, nrow=length(body), ncol=length(titles), byrow=TRUE)
@@ -87,22 +139,21 @@ read_log_file <- function(path) {
           s<-trimws(str_split(body[k],"[\\t\\/\\|]")[[1]])
           s<-s[s!=""]
           m[k,] <- as.numeric(s[-1])
+          ts<-c(ts, s[1])
      }
      
      d<-as.data.frame(m)
      names(d)<-titles
      
+     ts<-stri_replace_last_fixed(ts,pattern = ":", replacement = ".")
+     op <- options(digits.secs = 3)
+     ts<-strptime(ts, "%H:%M:%OS")
+     dts<-round(diff(ts),3)
+     dts[dts==0]<-0.001
      
-     #Check for a negative time difference
-     dt<-diff(d$Time)
-     while (any(dt<0)){
-          ind=which(dt<0)
-          stop<-ind[1]
-          d$Time[(stop+1):nrow(d)]<-d$Time[(stop+1):nrow(d)]-d$Time[stop+1]+0.06+d$Time[stop]
-          #start<-which(d$Time>=d$Time[ind[1]+1])[1]
-          #d <-filter(d,row_number()<start | row_number()>stop)
-          dt<-diff(d$Time)
-     }
+     d$Time<-cumsum(c(d$Time[1], dts))
+     options(op)
+     
      
      dfz<- gather(d, "variable", "value", -1) %>% 
           separate(variable, c("variable", "Electrode"), sep = "_") %>%
@@ -120,30 +171,23 @@ read_log_file <- function(path) {
 }
 
 
-abl_summary <- function(Abl){
+# abl_summary <- function(Abl){
+#      
+#      df<-Abl@Data
+#      S <- data.frame(AblNum=Abl@AblNum, 
+#                      Date=Abl@Date, 
+#                      SW_version=Abl@SW_version,
+#                      HW_version=Abl@HW_version,
+#                      MaxDuration=Abl@MaxDuration, 
+#                      AblDuration=Abl@Data$Time[nrow(Abl@Data)],
+#                      PreAblTime=Abl@Data$Time[1],
+#                      Catheter=Abl@Catheter,
+#                      AblMode=Abl@Mode,
+#                      StopReason=Abl@StopReason,
+#                      Annotation=Abl@Annotation
+#                      )
+#      
+#      S<-S[rep(1,nrow(df)),] 
      
-     df<-Abl@Data
-     S <- data.frame(AblNum=Abl@AblNum, 
-                     Date=Abl@Date, 
-                     SW_version=Abl@SW_version,
-                     HW_version=Abl@HW_version,
-                     MaxDuration=Abl@MaxDuration, 
-                     AblDuration=Abl@Data$Time[nrow(Abl@Data)],
-                     PreAblTime=Abl@Data$Time[1],
-                     Catheter=Abl@Catheter,
-                     AblMode=Abl@Mode,
-                     StopReason=Abl@StopReason
-                     )
-     
-     S<-S[rep(1,Abl@ElecNum),] 
-     
-     
-     # Mode="character",
-     # Catheter="character",
-     # 
-     # ElecNum="numeric",
-     #
-     # Data="data.frame"
-     
-     
-}
+ 
+#}
