@@ -26,9 +26,9 @@ read_all_ablations<-function(files){
      #files <- list.files(path, full.names = T, pattern=".*ABL.*txt")
      
      dfs<-NULL
-     for (file in files){
-          print(file)
-          Abl<-read_log_file(file)
+     for (i in seq_along(files$datapath)){
+          #print(files$name[i])
+          Abl<-read_log_file(files$datapath[i])
           df<-Abl@Data
           S <- data.frame(AblNum=as.factor(Abl@AblNum), 
                           Date=Abl@Date, 

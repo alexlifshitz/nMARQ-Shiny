@@ -17,23 +17,25 @@ shinyServer(function(input, output, session) {
      observeEvent(
           ignoreNULL = T,
           eventExpr = {
-               input$directory
+               input$Dir
           },
           handlerExpr = {
-               if (input$directory > 0) {
+               if (!is.null(input$Dir)) {
                     # condition prevents handler execution on initial app launch
                     
                     # launch the directory selection dialog with initial path read from the widget
-                    path = choose.dir(default = readDirectoryInput(session, 'directory'))
+                    ##path = choose.dir(default = readDirectoryInput(session, 'directory'))
                     
                     # update the widget value
-                    updateDirectoryInput(session, 'directory', value = path)
+                    ##updateDirectoryInput(session, 'directory', value = path)
                     
                     #files <<- list.files(readDirectoryInput(session, 'directory'), full.names = T, pattern=".*ABL.*txt")
-                    files <<- list.files(path, full.names = T, pattern=".*ABL.*txt")
-                    files <<- mixedsort(files)
+                    ##files <<- list.files(path, full.names = T, pattern=".*ABL.*txt")
                     
-                    updateSelectInput(session, "file", choices=basename(files))
+                    files<<-input$Dir
+                    files <<- files[mixedorder(files$name),]
+                    
+                    updateSelectInput(session, "file", choices=files$name)
                     output$load_case <- renderUI({
                          actionButton("action", label = "Process Case Data")
                     })
@@ -46,7 +48,8 @@ shinyServer(function(input, output, session) {
      get_ablation_data<-eventReactive(input$file, valueExpr = {
                if (input$file > 0) {
                     
-                    ablation_file = files[stri_endswith_fixed(files, input$file)]
+                    #ablation_file = files[stri_endswith_fixed(files, input$file)]
+                    ablation_file = files$datapath[input$file==files$name]
                     Ablation<-read_log_file(ablation_file)
                     updateSelectInput(session, "elec", choices=1:Ablation@ElecNum)
                     return(Ablation)
@@ -78,7 +81,7 @@ shinyServer(function(input, output, session) {
           output$CasePlot <- renderPlotly({
                # g<-ggplot(dfs, aes(x=AblNum, y=Pow, color=Electrode))+geom_point(size=3, alpha=0.5)
                # ggplotly(g)  
-               plot_ly(dfs, x=AblNum, y=Pow, mode = "markers", color = Electrode)
+               plot_ly(dfs, x=AblNum, y=Pow, mode = "markers", color = Electrode, marker = list(opacity = 0.8, size = 12))
           })
           
           

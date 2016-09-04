@@ -2,7 +2,7 @@ library(shiny)
 library(plotly)
 
 shinyUI(fluidPage(
-     
+     includeScript("./www/text.js"),
      # Application title
      titlePanel("nMARQ Log Analysis Tool"),
      
@@ -11,10 +11,19 @@ shinyUI(fluidPage(
      # br() element to introduce extra vertical spacing
      sidebarLayout(
           sidebarPanel(
-               # fileInput('file', 'Select Ablation Log file',
-               #           accept=c('text/plain','.txt')),
-               directoryInput('directory', label = 'Select a folder', 
-                              value = 'C:\\Data Science\\nMARQ Shiny\\test'),
+               #fileInput('file', 'Select Ablation Log file',accept=c('.zip','.txt')),
+               # directoryInput('directory', label = 'Select a folder',
+               #                value = 'C:\\Data Science\\nMARQ Shiny\\test'),
+               tags$div(class="form-group shiny-input-container",
+                        #tags$label("Select a folder"),
+                        tags$div(tags$label("Choose folder", class="btn btn-primary",
+                                            tags$input(id = "Dir", webkitdirectory = TRUE,
+                                                       type = "file", style="display: none;", onchange="pressed()"))),
+                        tags$div(id="Dir_progress", class="progress progress-striped active shiny-file-input-progress",
+                        tags$label("No folder choosen", id = "noFile"),
+                        tags$div(class="progress-bar")
+                        )
+               ),
                selectInput("file", label = "Ablations",choices=NULL),
                tags$hr(),
                textInput("case", label="Case Name", value = NULL, width = "100%", placeholder = "Case Name"),
@@ -42,14 +51,7 @@ shinyUI(fluidPage(
                                          selected = 1),
                              plotlyOutput("ParamPlot",height = "500px")
                              ),
-                    # tabPanel("Parameter View", 
-                    #          # tags$hr(),
-                    #          # selectInput("param", label = "Select Parameter", 
-                    #          #             choices = list("Power" = 3, "Temperature" = 6, "Impedance" = 5), 
-                    #          #             selected = 1),
-                    #          # plotlyOutput("ParamPlot",height = "500px"),
-                    #          # textInput("AnnotationP", label=NULL, value = "", width = "80%", placeholder = "Annotate graph...")
-                    # ),
+                    
                     tabPanel("Case View", 
                              br(),
                              uiOutput("load_case"),
