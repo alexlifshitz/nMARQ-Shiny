@@ -10,7 +10,7 @@ shinyUI(fluidPage(
      # and number of observations to generate. Note the use of the
      # br() element to introduce extra vertical spacing
      sidebarLayout(
-          sidebarPanel(
+          sidebarPanel(width=2,
                #fileInput('file', 'Select Ablation Log file',accept=c('.zip','.txt')),
                # directoryInput('directory', label = 'Select a folder',
                #                value = 'C:\\Data Science\\nMARQ Shiny\\test'),
@@ -24,7 +24,6 @@ shinyUI(fluidPage(
                         tags$div(class="progress-bar")
                         )
                ),
-               selectInput("file", label = "Ablations",choices=NULL),
                tags$hr(),
                textInput("case", label="Case Name", value = NULL, width = "100%", placeholder = "Case Name"),
                textInput("author", label="Author", value = "", width = "100%", placeholder = "John Smith"),
@@ -37,20 +36,25 @@ shinyUI(fluidPage(
                tabsetPanel(
                     tabPanel("Ablation View", 
                              
-                             # fluidRow(
-                             #      column(3,selectInput("elec", label = "Select Electrode", 1, selected = 1)),
-                             #      column(4,actionButton("next", "Next"))),
-                             # tags$style(type='text/css', "#next { margin-top: 25px;}"),
-                             
-                             selectInput("elec", label = "Select Electrode", 1, selected = 1),
-                             plotlyOutput("ElectrodePlot",height = "500px"),
+                             fluidRow(
+                                  column(2,selectInput("file", label = "Ablations",choices=NULL)),
+                                  column(2,selectInput("elec", label = "Select Electrode", 1, selected = 1))
+                             #tags$style(type='text/css', "#next { margin-top: 25px;}"
+                             ),
+                             fluidRow(
+                                  column(10,plotlyOutput("ElectrodePlot",height = "500px")),
+                                  column(2,br(),br(),tableOutput('table1'))
+                             ),
+                                                     
                              textInput("AnnotationE", label=NULL, value = "", width = "80%", placeholder = "Annotate graph..."),
                              tags$hr(),
                              selectInput("param", label = "Select Parameter", 
                                          choices = list("Power" = 3, "Temperature" = 6, "Impedance" = 5), 
                                          selected = 1),
-                             plotlyOutput("ParamPlot",height = "500px")
-                             ),
+                             fluidRow(
+                                  column(10,plotlyOutput("ParamPlot",height = "500px")),
+                                  column(2,br(),br(),tableOutput('table2'))
+                             )),
                     
                     tabPanel("Case View", 
                              br(),
@@ -59,7 +63,13 @@ shinyUI(fluidPage(
                                          choices = list("Power" = 9, "Temperature" = 12, "Impedance" = 11), 
                                          selected = NULL),
                              plotlyOutput("CasePlot",height = "500px")
-                             )
+                             ),
+                    
+                    tabPanel("Export Data", 
+                             downloadButton('downloadData', 'Export Raw Data'),
+                             br(),
+                             DT::dataTableOutput('All_data')
+                    )
                     
                )
           )

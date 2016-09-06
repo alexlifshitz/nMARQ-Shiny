@@ -21,31 +21,38 @@ setClass(Class="ablation",
          )
 )
 
+
+
 read_all_ablations<-function(files){
      
      #files <- list.files(path, full.names = T, pattern=".*ABL.*txt")
      
      dfs<-NULL
-     for (i in seq_along(files$datapath)){
-          #print(files$name[i])
-          Abl<-read_log_file(files$datapath[i])
-          df<-Abl@Data
-          S <- data.frame(AblNum=as.factor(Abl@AblNum), 
-                          Date=Abl@Date, 
-                          #SW_version=Abl@SW_version,
-                          #HW_version=Abl@HW_version,
-                          MaxDuration=Abl@MaxDuration, 
-                          #AblDuration=Abl@Data$Time[nrow(Abl@Data)],
-                          #PreAblTime=Abl@Data$Time[1],
-                          Catheter=Abl@Catheter,
-                          AblMode=Abl@Mode,
-                          StopReason=Abl@StopReason
-                          #Annotation=Abl@Annotation
-          )
-          
-          S<-S[rep(1,nrow(df)),] 
-          dfs<-rbind(dfs, cbind(S, df))
-     }
+     withProgress(message = 'Processing ablations files...', value = 0, {
+          Sys.sleep(0.25)
+          for (i in seq_along(files$datapath)){
+               #print(files$name[i])
+               incProgress(1/length(files$datapath), detail = files$name[i])
+               Abl<-read_log_file(files$datapath[i])
+               df<-Abl@Data
+               S <- data.frame(AblNum=as.factor(Abl@AblNum), 
+                               Date=Abl@Date, 
+                               #SW_version=Abl@SW_version,
+                               #HW_version=Abl@HW_version,
+                               MaxDuration=Abl@MaxDuration, 
+                               #AblDuration=Abl@Data$Time[nrow(Abl@Data)],
+                               #PreAblTime=Abl@Data$Time[1],
+                               Catheter=Abl@Catheter,
+                               AblMode=Abl@Mode,
+                               StopReason=Abl@StopReason
+                               #Annotation=Abl@Annotation
+               )
+               
+               S<-S[rep(1,nrow(df)),] 
+               dfs<-rbind(dfs, cbind(S, df))
+          }
+          row.names(dfs)<-NULL
+     })
      return(dfs)
      
 }
@@ -169,25 +176,31 @@ read_log_file <- function(path) {
      return(Abl)
      
 }
-
-
-# abl_summary <- function(Abl){
-#      
-#      df<-Abl@Data
-#      S <- data.frame(AblNum=Abl@AblNum, 
-#                      Date=Abl@Date, 
-#                      SW_version=Abl@SW_version,
-#                      HW_version=Abl@HW_version,
-#                      MaxDuration=Abl@MaxDuration, 
-#                      AblDuration=Abl@Data$Time[nrow(Abl@Data)],
-#                      PreAblTime=Abl@Data$Time[1],
-#                      Catheter=Abl@Catheter,
-#                      AblMode=Abl@Mode,
-#                      StopReason=Abl@StopReason,
-#                      Annotation=Abl@Annotation
-#                      )
-#      
-#      S<-S[rep(1,nrow(df)),] 
-     
  
-#}
+
+low<-function(x) {quantile(x, 0.05)}
+high<-function(x) {quantile(x, 0.95)}
+
+
+elec_summary <- function(Abl, Elec){
+
+     dff<-group_by(Abl@Data,Electrode) %>% 
+          summarize_each_(funs("max","high","mean", "median", "low", "min"),c("Pow", "Temp", "Imp")) %>%
+          filter(Electrode==Elec) 
+     dfz<- gather(dff, "variable", "value", -1) %>% 
+          separate(variable, c("variable", "Function"), sep = "_") %>%
+          spread(variable, value)
+     dfz<-dplyr::select(dfz,-Electrode) %>% arrange(desc(Temp))
+     return(dfz)
+     
+}
+
+param_summary <- function(Abl, param){
+     
+     
+     dff<-group_by(Abl@Data,Electrode) %>% dplyr::select_("Electrode", param) %>%
+          summarize_each_(funs("max","high","mean", "median", "low", "min"),param) 
+          
+     return(dff)
+     
+}

@@ -6,6 +6,7 @@ library(dplyr)
 library(tidyr)
 library(gtools)
 library(ggplot2)
+library(DT)
 
 source('functions.R')
 
@@ -32,7 +33,7 @@ shinyServer(function(input, output, session) {
                     #files <<- list.files(readDirectoryInput(session, 'directory'), full.names = T, pattern=".*ABL.*txt")
                     ##files <<- list.files(path, full.names = T, pattern=".*ABL.*txt")
                     
-                    files<<-input$Dir
+                    files<<- filter(input$Dir, grepl(".*ABL.*txt", name))
                     files <<- files[mixedorder(files$name),]
                     
                     updateSelectInput(session, "file", choices=files$name)
@@ -62,7 +63,36 @@ shinyServer(function(input, output, session) {
      load_case <- eventReactive(input$action, {
           if (is.null(Ablations)){
                
-               Ablations<<-read_all_ablations(files)
+               #Ablations<<-read_all_ablations(files)
+               
+               dfs<-NULL
+               withProgress(message = 'Processing ablations files...', value = 0, {
+                    Sys.sleep(0.25)
+                    for (i in seq_along(files$datapath)){
+                         #print(files$name[i])
+                         incProgress(1/length(files$datapath), detail = files$name[i])
+                         Abl<-read_log_file(files$datapath[i])
+                         df<-Abl@Data
+                         S <- data.frame(AblNum=as.factor(Abl@AblNum), 
+                                         Date=Abl@Date, 
+                                         #SW_version=Abl@SW_version,
+                                         #HW_version=Abl@HW_version,
+                                         MaxDuration=Abl@MaxDuration, 
+                                         #AblDuration=Abl@Data$Time[nrow(Abl@Data)],
+                                         #PreAblTime=Abl@Data$Time[1],
+                                         Catheter=Abl@Catheter,
+                                         AblMode=Abl@Mode,
+                                         StopReason=Abl@StopReason
+                                         #Annotation=Abl@Annotation
+                         )
+                         
+                         S<-S[rep(1,nrow(df)),] 
+                         dfs<-rbind(dfs, cbind(S, df))
+                    }
+               })
+               row.names(dfs)<-NULL
+               Ablations<<-dfs
+               
                output$load_case <- renderUI({
                     actionButton("action", label = "Done")
                })
@@ -85,11 +115,22 @@ shinyServer(function(input, output, session) {
           })
           
           
-          
      })
      
      
-     
+     observe({
+          
+               output$All_data <- DT::renderDataTable({
+               DT::datatable(Ablations, filter = 'top',rownames = FALSE,options = list(orderClasses = TRUE,pageLength = 5, dom = 'tip',autoWidth = F))
+          })
+          
+          output$downloadData <- downloadHandler(
+               filename = function() { paste('All_data', '.csv', sep='') },
+               content = function(file) {
+                    write.csv(Ablations, file)
+               }
+          )
+     })
      
      
      observe({
@@ -106,6 +147,9 @@ shinyServer(function(input, output, session) {
                xlab("Time [sec]")+ylab(names(Ablation@Data)[as.numeric(input$param)])+xlim(-5, Ablation@MaxDuration)
           ggplotly(g)
           })
+          
+          output$table2 <- renderTable(param_summary(Ablation,names(Ablation@Data)[as.numeric(input$param)]),include.rownames=FALSE)
+          
           
           df<-filter(Ablation@Data,Electrode==input$elec)
           
@@ -146,6 +190,8 @@ shinyServer(function(input, output, session) {
                            annotations=a, margin=m, legend=list(x=1.05, orientation="v")
                            ) 
           })
+          
+          output$table1 <- renderTable(elec_summary(Ablation,input$elec),include.rownames=FALSE)
          
      })
      
