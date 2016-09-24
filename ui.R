@@ -1,10 +1,11 @@
 library(shiny)
 library(plotly)
+require(markdown)
 
 shinyUI(fluidPage(
      includeScript("./www/text.js"),
      # Application title
-     titlePanel("nMARQ Log Analysis Tool"),
+     titlePanel("EP Data Analysis Platform"),
      
      # Sidebar with controls to select the random distribution type
      # and number of observations to generate. Note the use of the
@@ -16,19 +17,21 @@ shinyUI(fluidPage(
                #                value = 'C:\\Data Science\\nMARQ Shiny\\test'),
                tags$div(class="form-group shiny-input-container",
                         #tags$label("Select a folder"),
-                        tags$div(tags$label("Choose folder", class="btn btn-primary",
+                        tags$div(tags$label("Load Case", class="btn btn-primary",
                                             tags$input(id = "Dir", webkitdirectory = TRUE,
-                                                       type = "file", style="display: none;", onchange="pressed()"))),
+                                                       type = "file", accept=".txt", style="display: none;", onchange="pressed()"))),
                         tags$div(id="Dir_progress", class="progress progress-striped active shiny-file-input-progress",
                         tags$label("No folder choosen", id = "noFile"),
                         tags$div(class="progress-bar")
                         )
                ),
+               actionButton("example", "Load Demo"),
                tags$hr(),
                textInput("case", label="Case Name", value = NULL, width = "100%", placeholder = "Case Name"),
-               textInput("author", label="Author", value = "", width = "100%", placeholder = "John Smith"),
+               textInput("doctor", label="Physician", value = "", width = "100%", placeholder = "John"),
+               textInput("site", label="Site", value = "", width = "100%", placeholder = "Site Name"),
                #tags$textarea(id="description", rows=3, cols=40, "Default value")
-               textInput("description", label="Case Description", value = "", width = "100%", placeholder = "Very important study"),
+               textInput("description", label="Case Description", value = "", width = "100%", placeholder = "Demo"),
                tags$hr()
                
           ),
@@ -59,18 +62,35 @@ shinyUI(fluidPage(
                     tabPanel("Case View", 
                              br(),
                              uiOutput("load_case"),
-                             selectInput("param_case", label = "Select Parameter", 
-                                         choices = list("Power" = 9, "Temperature" = 12, "Impedance" = 11), 
-                                         selected = NULL),
+                             fluidRow(
+                                  column(2,selectInput("param_case_y", label = "Select Y Axis Parameter", 
+                                                       choices = list("Power" = "Pow", "Temperature" = "Temp", "Impedance" = "Imp"), selected = "Pow")
+                                         ),
+                                  column(2,selectInput("sumy", label = "Summarize by", 
+                                                       choices = list("mean" = "mean"), selected="mean")
+                                         )
+                                  
+                             ),
+                             
                              plotlyOutput("CasePlot",height = "500px")
                              ),
                     
                     tabPanel("Export Data", 
-                             downloadButton('downloadData', 'Export Raw Data'),
                              br(),
-                             DT::dataTableOutput('All_data')
-                    )
+                             downloadButton('downloadSumData', 'Export Summary Data'),
+                             br(),
+                             DT::dataTableOutput('Sum_data'),
+                             tags$hr(),
+                             downloadButton('downloadRawData', 'Export Raw Data'),
+                             br(),
+                             DT::dataTableOutput('All_data'),
+                             tags$hr()
+                    ),
                     
+                    tabPanel("Big Picture Demo", 
+                             passwordInput("password", "Password:"),
+                             uiOutput("md")
+                    )
                )
           )
      ))

@@ -21,44 +21,23 @@ setClass(Class="ablation",
          )
 )
 
+setClass(Class="case",
+         representation(
+              Name="character",
+              Description="character",
+              Physician="character",
+              Site="character",
+              Date="POSIXct",
+              SW_version="character",
+              HW_version="character",
+              Data="data.frame"
+         )
+)
 
-
-read_all_ablations<-function(files){
-     
-     #files <- list.files(path, full.names = T, pattern=".*ABL.*txt")
-     
-     dfs<-NULL
-     withProgress(message = 'Processing ablations files...', value = 0, {
-          Sys.sleep(0.25)
-          for (i in seq_along(files$datapath)){
-               #print(files$name[i])
-               incProgress(1/length(files$datapath), detail = files$name[i])
-               Abl<-read_log_file(files$datapath[i])
-               df<-Abl@Data
-               S <- data.frame(AblNum=as.factor(Abl@AblNum), 
-                               Date=Abl@Date, 
-                               #SW_version=Abl@SW_version,
-                               #HW_version=Abl@HW_version,
-                               MaxDuration=Abl@MaxDuration, 
-                               #AblDuration=Abl@Data$Time[nrow(Abl@Data)],
-                               #PreAblTime=Abl@Data$Time[1],
-                               Catheter=Abl@Catheter,
-                               AblMode=Abl@Mode,
-                               StopReason=Abl@StopReason
-                               #Annotation=Abl@Annotation
-               )
-               
-               S<-S[rep(1,nrow(df)),] 
-               dfs<-rbind(dfs, cbind(S, df))
-          }
-          row.names(dfs)<-NULL
-     })
-     return(dfs)
-     
-}
 
 read_log_file <- function(path) {
      
+
      Abl<-new("ablation")
      
      n_header<-6
@@ -129,14 +108,12 @@ read_log_file <- function(path) {
      titles<-rep(titles_single,n_elec)
      
      for (k in c(1:n_elec)){
-          titles[(k-1)*n_elec+1:n_elec]<-paste(titles[(k-1)*n_elec+1:n_elec],k,sep= "_")
+          titles[(k-1)*n_params+1:n_params]<-paste(titles[(k-1)*n_params+1:n_params],k,sep= "_")
      }
      
      titles<-c("Time",titles)
      
    
-     #d<-as.data.frame(setNames(replicate(length(titles),numeric(0), simplify = F), titles))
-     #d<-cbind(data.frame(TS=character(), stringsAsFactors = F), d)
      ts<-NULL
      
      
@@ -178,15 +155,62 @@ read_log_file <- function(path) {
 }
  
 
+df2Ablation <- function(df) {
+  
+     Abl<-new("ablation")
+     
+     Abl@AblNum<-as.numeric(as.character(df$AblNum[1]))
+     Abl@Date<-df$Date[1]
+     Abl@SW_version<-as.character(df$SW_version[1])
+     Abl@HW_version<-as.character(df$HW_version[1])
+     Abl@Mode<-as.character(df$AblMode[1])
+     Abl@Catheter<-as.character(df$Catheter[1])
+     Abl@MaxDuration<-df$MaxDuration[1]
+     Abl@ElecNum<-nlevels(df$Electrode)
+     Abl@StopReason<-as.character(df$StopReason[1])
+     Abl@Annotation<-as.character(df$Annotation[1])
+     Abl@Data<-dplyr::select(df, -c(AblNum, 
+                                    Date, 
+                                    SW_version,
+                                    HW_version,
+                                    MaxDuration, 
+                                    Catheter,
+                                    AblMode,
+                                    StopReason,
+                                    Annotation))
+     
+     return(Abl)
+     
+}
+
+
 low<-function(x) {quantile(x, 0.05)}
 high<-function(x) {quantile(x, 0.95)}
 
+average_inrange <-function(x, t, range){
+     
+     if (range[1]>=range[2]){
+          return(NA)
+     }
+     
+     start<-which(t>=range[1])[1]
+     stop<- tail(which(t<=range[2]),1)
+     
+     if (is.na(start) | is.na(stop)){
+          return(NA)
+     }else{
+          return(mean(x[start:stop]))
+     }
+     
+}
 
-elec_summary <- function(Abl, Elec){
+elec_summary <- function(Abl, Elec, Tmin=0, Tmax=Inf){
 
-     dff<-group_by(Abl@Data,Electrode) %>% 
+     dff<-filter(Abl@Data, Time>=Tmin, Time<=Tmax) %>% 
+          group_by(Electrode) %>% 
           summarize_each_(funs("max","high","mean", "median", "low", "min"),c("Pow", "Temp", "Imp")) %>%
           filter(Electrode==Elec) 
+     
      dfz<- gather(dff, "variable", "value", -1) %>% 
           separate(variable, c("variable", "Function"), sep = "_") %>%
           spread(variable, value)
@@ -195,12 +219,83 @@ elec_summary <- function(Abl, Elec){
      
 }
 
-param_summary <- function(Abl, param){
+param_summary <- function(Abl, param,Tmin=0, Tmax=Inf){
      
      
-     dff<-group_by(Abl@Data,Electrode) %>% dplyr::select_("Electrode", param) %>%
+     dff<-filter(Abl@Data, Time>=Tmin, Time<=Tmax) %>% group_by(Electrode) %>% dplyr::select_("Electrode", param) %>%
           summarize_each_(funs("max","high","mean", "median", "low", "min"),param) 
           
      return(dff)
      
+}
+
+
+case_summary<-function(df, Tmin=0, Tmax=Inf){
+     if (is.null(df)){
+          return(NULL)
+     }
+     
+     # initial<-function (x){
+     #      SingleE<-filter(df, Electrode==1)
+     #      average_inrange(x, SingleE$Time, c(Tmin-1, Tmin))
+     # }
+     # 
+     dff<-filter(df, Time>=Tmin, Time<=Tmax) %>% group_by(AblNum,Electrode) %>% dplyr::select_("AblNum", "Electrode", "Pow", "Temp", "Imp") %>%
+                    #summarize_each_(funs("max","high","mean", "median", "low", "min"),c("Pow", "Temp", "Imp"))
+          summarize_each(funs(max,high,mean, median, low, min),c(Pow, Temp, Imp))
+     
+     dp<-group_by(df, AblNum,Electrode) %>% summarize(Date=Date[1], 
+                                                      MaxDuration=MaxDuration[1],
+                                                      Duration=max(Time), 
+                                                      Catheter=Catheter[1],
+                                                      AblMode=AblMode[1],
+                                                      StopReason=StopReason[1],
+                                                      PreAblationTime=as.factor(round(abs(Time[1]))), 
+                                                      #Imp_drop=quantile(Imp[Imp>0 & Time<0.5],0.95)-quantile(Imp[Imp>0 & Time>0],0.05),
+                                                      Imp_drop=quantile(Imp[Imp>0],0.95)-quantile(Imp[Imp>0],0.05),
+                                                      PowTarget=as.factor(max(PowT)),
+                                                      TempTarget=as.factor(max(TempT)), 
+                                                      isActive=PowTarget>0, 
+                                                      Temp_initial=Temp[Time>=0][1],
+                                                      Imp_initial=average_inrange(Imp,Time,c(Tmin-1,Tmin))
+                                                      )
+     dd<-merge(dp, dff, by=c("AblNum", "Electrode"))
+     
+     dd<-arrange(dd, AblNum, Electrode) %>% dplyr::select(-Imp_drop,  Imp_drop)
+      
+     return(dd)
+}
+
+
+read_all_ablations<-function(path){
+
+     files <- list.files(path, full.names = T, pattern=".*ABL.*txt")
+
+     dfs<-NULL
+    
+     for (i in seq_along(files)){
+          #print(files$name[i])
+          
+          Abl<-read_log_file(files[i])
+          df<-Abl@Data
+          S <- data.frame(AblNum=as.factor(Abl@AblNum),
+                          Date=Abl@Date,
+                          SW_version=Abl@SW_version,
+                          HW_version=Abl@HW_version,
+                          MaxDuration=Abl@MaxDuration,
+                          #AblDuration=Abl@Data$Time[nrow(Abl@Data)],
+                          #PreAblTime=Abl@Data$Time[1],
+                          Catheter=Abl@Catheter,
+                          AblMode=Abl@Mode,
+                          StopReason=Abl@StopReason,
+                          Annotation=Abl@Annotation
+          )
+
+          S<-S[rep(1,nrow(df)),]
+          dfs<-rbind(dfs, cbind(S, df))
+     }
+     row.names(dfs)<-NULL
+   
+     return(dfs)
+
 }

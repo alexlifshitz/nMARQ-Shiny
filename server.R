@@ -10,8 +10,10 @@ library(DT)
 
 source('functions.R')
 
+Ablation<-NULL
 Ablations<-NULL
 files<-NULL
+SumAblations<-NULL
 
 shinyServer(function(input, output, session) {
      
@@ -42,32 +44,86 @@ shinyServer(function(input, output, session) {
                     })
                     #Ablations<<-read_all_ablations(files)
                     Ablations<<-NULL
+                    SumAblations<<-NULL
+                    Ablation<<-NULL
                }
           }
      )
      
-     get_ablation_data<-eventReactive(input$file, valueExpr = {
-               if (input$file > 0) {
+     
+     observe({
+          output$md <- renderUI({
+               if (input$password=="sharktank"){
+                    includeMarkdown("data/nMARQ.md")     
+               }
+               
+          })
+     })
+     observeEvent(
+          ignoreNULL = T,
+          eventExpr = {
+               input$example
+          },
+          handlerExpr = {
+               if (!is.null(input$example)) {
+                    path <-"data/test"
+                    f <- list.files(path, full.names = T, pattern=".*ABL.*txt")
+                    files<<-data.frame(name=basename(f), datapath=f, stringsAsFactors = F)
                     
+                    updateSelectInput(session, "file", choices=files$name)
+                    output$load_case <- renderUI({
+                         actionButton("action", label = "Process Case Data")
+                    })
+                    #Ablations<<-read_all_ablations(files)
+                    Ablations<<-NULL
+                    SumAblations<<-NULL
+                    Ablation<<-NULL
+               }
+          }
+     )
+     
+     
+     get_ablation_data<-reactive({#eventReactive(input$file, valueExpr = {
+               if (input$file > 0) {
+                   
                     #ablation_file = files[stri_endswith_fixed(files, input$file)]
-                    ablation_file = files$datapath[input$file==files$name]
-                    Ablation<-read_log_file(ablation_file)
-                    updateSelectInput(session, "elec", choices=1:Ablation@ElecNum)
-                    return(Ablation)
+                    
+                    if (!is.null(Ablations)){
+                         r <- str_match(input$file, "ABL(\\d*?).txt")
+                         
+                         Abl<-df2Ablation(filter(Ablations,AblNum==as.numeric(r[2])))
+                         
+                    }else{
+                         ablation_file = files$datapath[input$file==files$name]
+                         Abl<-read_log_file(ablation_file)     
+                    }
+                    
+                    updateSelectInput(session, "elec", choices=1:Abl@ElecNum)
+                    Ablation<<-Abl
+                    return(Abl)
+               }else{
+                    Ablation<<-NULL
+                    return(NULL)
                }
 
           }
      )
      
      
-     load_case <- eventReactive(input$action, {
+     observeEvent(
+          ignoreNULL = T,
+          eventExpr = {
+               input$action
+          },
+          handlerExpr = {
+     
           if (is.null(Ablations)){
                
                #Ablations<<-read_all_ablations(files)
                
                dfs<-NULL
                withProgress(message = 'Processing ablations files...', value = 0, {
-                    Sys.sleep(0.25)
+                    
                     for (i in seq_along(files$datapath)){
                          #print(files$name[i])
                          incProgress(1/length(files$datapath), detail = files$name[i])
@@ -75,15 +131,15 @@ shinyServer(function(input, output, session) {
                          df<-Abl@Data
                          S <- data.frame(AblNum=as.factor(Abl@AblNum), 
                                          Date=Abl@Date, 
-                                         #SW_version=Abl@SW_version,
-                                         #HW_version=Abl@HW_version,
+                                         SW_version=Abl@SW_version,
+                                         HW_version=Abl@HW_version,
                                          MaxDuration=Abl@MaxDuration, 
                                          #AblDuration=Abl@Data$Time[nrow(Abl@Data)],
                                          #PreAblTime=Abl@Data$Time[1],
                                          Catheter=Abl@Catheter,
                                          AblMode=Abl@Mode,
-                                         StopReason=Abl@StopReason
-                                         #Annotation=Abl@Annotation
+                                         StopReason=Abl@StopReason,
+                                         Annotation=Abl@Annotation
                          )
                          
                          S<-S[rep(1,nrow(df)),] 
@@ -93,41 +149,95 @@ shinyServer(function(input, output, session) {
                row.names(dfs)<-NULL
                Ablations<<-dfs
                
+               SumAblations<<-case_summary(Ablations)      
+               
+               params<-names(SumAblations)[grepl(pattern = "_",names(SumAblations))]
+               params<-as.data.frame(str_split(params,"_",simplify = T))
+               names(params)<-c("param", "func")
+               
+               ch=as.character(params$func[params$param==input$param_case_y])
+               updateSelectInput(session, "sumy", choices=ch)     
+               
                output$load_case <- renderUI({
                     actionButton("action", label = "Done")
+               
                })
                
           }
-          return(Ablations)
-     })
-     
-    
-     
-     observe({
-          load_case()
-          dfs<-dplyr::select(Ablations, AblNum, Electrode, Pow, Temp, Imp) %>% group_by(AblNum, Electrode) %>%
-               summarize_each_(funs_("mean"),c("Pow"))
-     
-          output$CasePlot <- renderPlotly({
-               # g<-ggplot(dfs, aes(x=AblNum, y=Pow, color=Electrode))+geom_point(size=3, alpha=0.5)
-               # ggplotly(g)  
-               plot_ly(dfs, x=AblNum, y=Pow, mode = "markers", color = Electrode, marker = list(opacity = 0.8, size = 12))
-          })
-          
-          
      })
      
      
+     observeEvent(
+          ignoreNULL = T,
+          eventExpr = {
+               input$sumy
+               input$param_case_y
+          },
+          handlerExpr = {
+               
+               
+               if (is.null(Ablations)) {
+                    SumAblations<<-NULL
+                    return(NULL)
+               }
+               yaxis<-paste(input$param_case_y,input$sumy,sep="_")
+               if (yaxis %in% names(SumAblations)){
+                    dfp<-dplyr::select_(SumAblations,"AblNum", "Electrode", yaxis)
+                    names(dfp)[names(dfp)==yaxis]<-"Yaxis"
+                    output$CasePlot <- renderPlotly({
+                         plot_ly(dfp, x=AblNum, y=Yaxis, mode = "markers", color = Electrode, colors = "Paired", marker = list(opacity = 0.8, size = 12)) %>%
+                              
+                              layout(title = sprintf("Case Summary - %s", yaxis), 
+                                     xaxis = list(title = "Ablation Number", ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
+                                     yaxis=  list(title=yaxis, range = c(ifelse(min(Yaxis)>0,0,min(Yaxis)*1.05), max(Yaxis)*1.05), autotick = T, tick0 = 0, ticks = "outside",showline=T,zeroline=T,gridcolor = toRGB("gray80"))
+                                     
+                              )
+                    })
+                    
+               }
+               
+    })
+     
+     observeEvent(
+          ignoreNULL = T,
+          eventExpr = {
+               input$param_case_y
+          },
+          handlerExpr = {
+               if(!is.null(SumAblations)){
+                    
+                    
+                    params<-names(SumAblations)[grepl(pattern = "_",names(SumAblations))]
+                    params<-as.data.frame(str_split(params,"_",simplify = T))
+                    names(params)<-c("param", "func")
+                    
+                    ch=as.character(params$func[params$param==input$param_case_y])
+                    updateSelectInput(session, "sumy", choices=ch, selected = ch[1])
+               }
+               
+          })
+     
      observe({
-          
-               output$All_data <- DT::renderDataTable({
-               DT::datatable(Ablations, filter = 'top',rownames = FALSE,options = list(orderClasses = TRUE,pageLength = 5, dom = 'tip',autoWidth = F))
+          output$All_data <- DT::renderDataTable({
+               
+               DT::datatable(Ablations, filter = 'top',rownames = FALSE,options = list(orderClasses = TRUE,pageLength = 5, dom = 'tip',autoWidth = F)) 
           })
           
-          output$downloadData <- downloadHandler(
+          output$Sum_data <- DT::renderDataTable({
+               
+               DT::datatable(SumAblations, filter = 'top',rownames = FALSE,options = list(orderClasses = TRUE,pageLength = 5,dom = 'tip',autoWidth = F)) #pageLength = 10
+          })
+          
+          output$downloadRawData <- downloadHandler(
                filename = function() { paste('All_data', '.csv', sep='') },
                content = function(file) {
                     write.csv(Ablations, file)
+               }
+          )
+          output$downloadSumData <- downloadHandler(
+               filename = function() { paste('Summary_data', '.csv', sep='') },
+               content = function(file) {
+                    write.csv(SumAblations, file)
                }
           )
      })
@@ -135,7 +245,7 @@ shinyServer(function(input, output, session) {
      
      observe({
              
-          Ablation <- get_ablation_data()
+          Ablation <<- get_ablation_data()
           if (is.null(Ablation)) {
                 return(NULL)
           }
@@ -150,14 +260,33 @@ shinyServer(function(input, output, session) {
           
           output$table2 <- renderTable(param_summary(Ablation,names(Ablation@Data)[as.numeric(input$param)]),include.rownames=FALSE)
           
+     })
+     
+     
+     observe({
+          Ablation <<- get_ablation_data()
+          if (is.null(Ablation)) {
+               return(NULL)
+          }
           
           df<-filter(Ablation@Data,Electrode==input$elec)
           
           a <- list(
                x = Ablation@MaxDuration,
-               y = max(c(df$Temp,df$Pow))*1.03,
+               y = max(c(df$Temp,df$Pow, df$TempT, df$PowT))*1.03,
                xanchor = "right",
                text = Ablation@StopReason,
+               xref = "x",
+               yref = "y",
+               showarrow = F,
+               ax = 0,
+               ay = 0
+          )
+          b <- list(
+               x = min(Ablation@Data$Time)+0.5,
+               y = max(c(df$Temp,df$Pow, df$TempT, df$PowT))*1.03,
+               xanchor = "left",
+               text = Ablation@Date,
                xref = "x",
                yref = "y",
                showarrow = F,
@@ -184,15 +313,14 @@ shinyServer(function(input, output, session) {
                     add_trace(x = Time, y = PowT, name = "PowT", showlegend=F,mode = "lines", line = list(color = toRGB("red"), dash="5px"),hoverinfo = "none") %>%
                     layout(title = sprintf("Ablation #%d: Electrode %s  (Catheter: %s %s)", Ablation@AblNum, input$elec, Ablation@Catheter, Ablation@Mode), 
                            yaxis2 = list(title="Impedance [Ohm]",overlaying = "y",side = "right",
-                                         range = c(min(df$Imp)*0.95, max(df$Imp)*1.05), autotick = F, tick0=0, dtick=max(1,ceiling((max(df$Imp)-min(df$Imp))/10)), ticks = "outside",showgrid=F, showline=T,zeroline=F),
-                           xaxis = list(title = "Time [sec]", range = c(-5, Ablation@MaxDuration), autorange = F,autotick = F, tick0 = -5, dtick = 5, ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
-                           yaxis=list(title="Power [W]/Temperature [deg C]", range = c(0, max(c(df$Temp,df$Pow))*1.05), autotick = F, tick0 = 0, dtick = 5, ticks = "outside",showline=T,zeroline=F,gridcolor = toRGB("gray80")),
-                           annotations=a, margin=m, legend=list(x=1.05, orientation="v")
-                           ) 
+                                         range = c(min(df$Imp)*0.95, max(df$Imp)*1.05), autotick = T, tick0=0, dtick=max(1,ceiling((max(df$Imp)-min(df$Imp))/10)), ticks = "outside",showgrid=F, showline=T,zeroline=F),
+                           xaxis = list(title = "Time [sec]", range = c(Ablation@Data$Time[1], Ablation@MaxDuration), autorange = F,autotick = T, tick0 = Ablation@Data$Time[1], ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
+                           yaxis=list(title="Power [W]/Temperature [deg C]", range = c(0, max(c(df$Temp,df$Pow, df$TempT, df$PowT))*1.05), autotick = T, tick0 = 0, dtick = 5, ticks = "outside",showline=T,zeroline=F,gridcolor = toRGB("gray80")),
+                           annotations=list(a,b), margin=m, legend=list(x=1.05, orientation="v")
+                    ) 
           })
           
           output$table1 <- renderTable(elec_summary(Ablation,input$elec),include.rownames=FALSE)
-         
      })
      
 })
