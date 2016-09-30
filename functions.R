@@ -1,9 +1,11 @@
 library(lubridate)
 library(plotly)
 library(stringr)
+library(stringi)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(pracma)
 
 setClass(Class="ablation",
          representation(
@@ -69,16 +71,21 @@ read_log_file <- function(path) {
      Abl@MaxDuration<-as.numeric(r[2])
      
      footer<-lines[length(lines)]
+     k<-0
+     while(!grepl("\\d+:\\d+:\\d+:\\d+",footer)){
+          k<-k+1
+          footer<-lines[length(lines)-k]
+     }
      
      if (grepl("Ablation", footer) | grepl("Error", footer)){
-          body<-lines[(n_header+1):(length(lines)-1)]
+          body<-lines[(n_header+1):(length(lines)-k-1)]
           Abl@StopReason<-trimws(str_split(footer,"\t")[[1]][2])
      }else{
-          body<-lines[(n_header+1):length(lines)]
+          body<-lines[(n_header+1):(length(lines)-k)]
           Abl@StopReason<-"Unspecified"
      }
      
-     Abl@Annotation=""
+     Abl@Annotation<-""
      
      s<-header[6]
      n_elec<-str_count(s,"\\|")
@@ -119,15 +126,35 @@ read_log_file <- function(path) {
      
      m<-matrix(NA, nrow=length(body), ncol=length(titles), byrow=TRUE)
      
+     
+     err<-NULL
+     
      for (k in 1:length(body)){
           s<-trimws(str_split(body[k],"[\\t\\/\\|]")[[1]])
           s<-s[s!=""]
-          m[k,] <- as.numeric(s[-1])
-          ts<-c(ts, s[1])
+          if (k==78){
+               a<-1
+          }
+          
+          if (length(s)!=length(titles)+1){
+               err<-c(err,k)
+               ts<-c(ts, NA)
+               Abl@Annotation<-"Log file contains error"
+               next
+          }else{
+               m[k,] <- as.numeric(s[-1])
+               ts<-c(ts, s[1])
+          }
      }
      
      d<-as.data.frame(m)
      names(d)<-titles
+     
+     if (length(err)>0){
+          d<-d[-err,]
+          ts<-ts[-err]
+     }
+     
      
      ts<-stri_replace_last_fixed(ts,pattern = ":", replacement = ".")
      op <- options(digits.secs = 3)
@@ -186,6 +213,22 @@ df2Ablation <- function(df) {
 
 low<-function(x) {quantile(x, 0.05)}
 high<-function(x) {quantile(x, 0.95)}
+
+rise<-function(x, t, range) {
+     if (range[1]>=range[2]){
+          return(NA)
+     }
+     start<-which(t>=range[1])[1]
+     stop<- tail(which(t<=range[2]),1)
+     
+     if (is.na(start) | is.na(stop)){
+          return(NA)
+     }else{
+          initial<-
+          return(mean(x[start:stop]))
+     }
+     
+}
 
 average_inrange <-function(x, t, range){
      
@@ -246,18 +289,26 @@ case_summary<-function(df, Tmin=0, Tmax=Inf){
      
      dp<-group_by(df, AblNum,Electrode) %>% summarize(Date=Date[1], 
                                                       MaxDuration=MaxDuration[1],
-                                                      Duration=max(Time), 
+                                                      Duration_sec=max(Time), 
                                                       Catheter=Catheter[1],
                                                       AblMode=AblMode[1],
                                                       StopReason=StopReason[1],
                                                       PreAblationTime=as.factor(round(abs(Time[1]))), 
-                                                      #Imp_drop=quantile(Imp[Imp>0 & Time<0.5],0.95)-quantile(Imp[Imp>0 & Time>0],0.05),
-                                                      Imp_drop=quantile(Imp[Imp>0],0.95)-quantile(Imp[Imp>0],0.05),
-                                                      PowTarget=as.factor(max(PowT)),
-                                                      TempTarget=as.factor(max(TempT)), 
-                                                      isActive=PowTarget>0, 
-                                                      Temp_initial=Temp[Time>=0][1],
-                                                      Imp_initial=average_inrange(Imp,Time,c(Tmin-1,Tmin))
+                                                      PowTarget=max(PowT),
+                                                      TempTarget=max(TempT), 
+                                                      isActive=(PowTarget>0 & max(Time)>0), 
+                                                      Energy_Joules=trapz(Time, Pow),
+                                                   
+                                                      Imp_drop=ifelse(isActive, 
+                                                                      quantile(Imp[Imp>0],0.95)-quantile(Imp[Imp>0],0.05),
+                                                                      NA),
+                                                      
+                                                      Temp_initial=ifelse(max(Pow)>0, Temp[Pow>0][1],Temp[Time>=Tmin][1]),
+                                                      Temp_rise=ifelse(isActive, 
+                                                                       quantile(Temp[Time>Tmin],0.95)-Temp_initial,
+                                                                       NA),
+                                                      Imp_initial=average_inrange(Imp,Time,c(max(Tmin-1, min(Time)),Tmin))
+                                                      
                                                       )
      dd<-merge(dp, dff, by=c("AblNum", "Electrode"))
      
@@ -274,7 +325,7 @@ read_all_ablations<-function(path){
      dfs<-NULL
     
      for (i in seq_along(files)){
-          #print(files$name[i])
+          print(files[i])
           
           Abl<-read_log_file(files[i])
           df<-Abl@Data

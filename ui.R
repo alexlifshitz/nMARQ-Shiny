@@ -25,7 +25,7 @@ shinyUI(fluidPage(
                         tags$div(class="progress-bar")
                         )
                ),
-               actionButton("example", "Load Demo"),
+               actionButton("demo", "Load Demo"),
                tags$hr(),
                textInput("case", label="Case Name", value = NULL, width = "100%", placeholder = "Case Name"),
                textInput("doctor", label="Physician", value = "", width = "100%", placeholder = "John"),
@@ -49,7 +49,7 @@ shinyUI(fluidPage(
                                   column(2,br(),br(),tableOutput('table1'))
                              ),
                                                      
-                             textInput("AnnotationE", label=NULL, value = "", width = "80%", placeholder = "Annotate graph..."),
+                             textInput("annotate", label=NULL, value = "", width = "80%", placeholder = "Annotate graph..."),
                              tags$hr(),
                              selectInput("param", label = "Select Parameter", 
                                          choices = list("Power" = 3, "Temperature" = 6, "Impedance" = 5), 
@@ -64,10 +64,12 @@ shinyUI(fluidPage(
                              uiOutput("load_case"),
                              fluidRow(
                                   column(2,selectInput("param_case_y", label = "Select Y Axis Parameter", 
-                                                       choices = list("Power" = "Pow", "Temperature" = "Temp", "Impedance" = "Imp"), selected = "Pow")
+                                                       choices = list("Power" = "Pow", "Temperature" = "Temp", "Impedance" = "Imp", "Energy"="Energy", "Duration"="Duration"), selected = "Pow")
                                          ),
                                   column(2,selectInput("sumy", label = "Summarize by", 
                                                        choices = list("mean" = "mean"), selected="mean")
+                                         ),
+                                  column(2,checkboxInput("active", "Only active", value = TRUE)
                                          )
                                   
                              ),

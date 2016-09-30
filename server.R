@@ -14,6 +14,7 @@ Ablation<-NULL
 Ablations<-NULL
 files<-NULL
 SumAblations<-NULL
+Annotations<-NULL
 
 shinyServer(function(input, output, session) {
      
@@ -46,6 +47,7 @@ shinyServer(function(input, output, session) {
                     Ablations<<-NULL
                     SumAblations<<-NULL
                     Ablation<<-NULL
+                    Annotations<<-NULL
                }
           }
      )
@@ -59,13 +61,14 @@ shinyServer(function(input, output, session) {
                
           })
      })
+     
      observeEvent(
           ignoreNULL = T,
           eventExpr = {
-               input$example
+               input$demo
           },
           handlerExpr = {
-               if (!is.null(input$example)) {
+               if (!is.null(input$demo)) {
                     path <-"data/test"
                     f <- list.files(path, full.names = T, pattern=".*ABL.*txt")
                     files<<-data.frame(name=basename(f), datapath=f, stringsAsFactors = F)
@@ -78,6 +81,29 @@ shinyServer(function(input, output, session) {
                     Ablations<<-NULL
                     SumAblations<<-NULL
                     Ablation<<-NULL
+                    Annotations<<-NULL
+               }
+          }
+     )
+     
+     observeEvent(
+          ignoreNULL = T,
+          eventExpr = {
+               input$annotate
+          },
+          handlerExpr = {
+               
+               r <- str_match(input$file, "ABL(\\d*?).txt")
+               Num<-as.numeric(r[2])
+               Elec<-as.numeric(input$elec)
+             
+               if (is.null(Annotations)){
+                    Annotations<<- data.frame(AblNum=Num, Electrode=Elec, Annotation=input$annotate, stringsAsFactors = F)
+               }else if (nrow(filter(Annotations, AblNum==Num, Electrode==Elec))==0){
+                    Annotations<<-rbind(Annotations, data.frame(AblNum=Num, Electrode=Elec, Annotation=input$annotate,stringsAsFactors = F))     
+                    
+               }else{
+                    Annotations$Annotation[Annotations$AblNum==Num & Annotations$Electrode==Elec]<<-input$annotate
                }
           }
      )
@@ -92,10 +118,12 @@ shinyServer(function(input, output, session) {
                          r <- str_match(input$file, "ABL(\\d*?).txt")
                          
                          Abl<-df2Ablation(filter(Ablations,AblNum==as.numeric(r[2])))
+                         #updateTextInput(session, "annotate", value = Abl@Annotation)
                          
                     }else{
                          ablation_file = files$datapath[input$file==files$name]
                          Abl<-read_log_file(ablation_file)     
+                         #updateTextInput(session, "annotate", value = NULL)
                     }
                     
                     updateSelectInput(session, "elec", choices=1:Abl@ElecNum)
@@ -125,7 +153,7 @@ shinyServer(function(input, output, session) {
                withProgress(message = 'Processing ablations files...', value = 0, {
                     
                     for (i in seq_along(files$datapath)){
-                         #print(files$name[i])
+                         print(files$name[i])
                          incProgress(1/length(files$datapath), detail = files$name[i])
                          Abl<-read_log_file(files$datapath[i])
                          df<-Abl@Data
@@ -172,6 +200,7 @@ shinyServer(function(input, output, session) {
           eventExpr = {
                input$sumy
                input$param_case_y
+               input$active
           },
           handlerExpr = {
                
@@ -180,9 +209,16 @@ shinyServer(function(input, output, session) {
                     SumAblations<<-NULL
                     return(NULL)
                }
+               
+               if (input$active==T){
+                    dfp<-filter(SumAblations, isActive==TRUE)
+               }else{
+                    dfp<-SumAblations
+               }
+               
                yaxis<-paste(input$param_case_y,input$sumy,sep="_")
-               if (yaxis %in% names(SumAblations)){
-                    dfp<-dplyr::select_(SumAblations,"AblNum", "Electrode", yaxis)
+               if (yaxis %in% names(dfp)){
+                    dfp<-dplyr::select_(dfp,"AblNum", "Electrode", yaxis) 
                     names(dfp)[names(dfp)==yaxis]<-"Yaxis"
                     output$CasePlot <- renderPlotly({
                          plot_ly(dfp, x=AblNum, y=Yaxis, mode = "markers", color = Electrode, colors = "Paired", marker = list(opacity = 0.8, size = 12)) %>%
@@ -224,7 +260,9 @@ shinyServer(function(input, output, session) {
           })
           
           output$Sum_data <- DT::renderDataTable({
-               
+               if (!is.null(Annotations)){
+                    SumAblations<<-merge(SumAblations, Annotations, by=c("AblNum", "Electrode"), all=T)
+               }
                DT::datatable(SumAblations, filter = 'top',rownames = FALSE,options = list(orderClasses = TRUE,pageLength = 5,dom = 'tip',autoWidth = F)) #pageLength = 10
           })
           
@@ -237,7 +275,15 @@ shinyServer(function(input, output, session) {
           output$downloadSumData <- downloadHandler(
                filename = function() { paste('Summary_data', '.csv', sep='') },
                content = function(file) {
-                    write.csv(SumAblations, file)
+                    if (!is.null(Annotations)){
+                         if ("Annotation" %in% colnames(SumAblations)){
+                              SumAblations<<-dplyr::select(SumAblations, -Annotation)
+                         } 
+                         SumAblations<<-merge(SumAblations, Annotations, by=c("AblNum", "Electrode"), all=T)
+                         
+                    }
+                    write.csv(SumAblations, file)     
+
                }
           )
      })
@@ -321,6 +367,20 @@ shinyServer(function(input, output, session) {
           })
           
           output$table1 <- renderTable(elec_summary(Ablation,input$elec),include.rownames=FALSE)
+          
+          r <- str_match(input$file, "ABL(\\d*?).txt")
+          Num<-as.numeric(r[2])
+          Elec<-as.numeric(input$elec)
+          
+          if (!is.null(Annotations)){
+               if (nrow(filter(Annotations, AblNum==Num, Electrode==Elec))==1){
+                    updateTextInput(session, "annotate", value = Annotations$Annotation[Annotations$AblNum==Num & Annotations$Electrode==Elec])     
+               }else{
+                    updateTextInput(session, "annotate", value = "") 
+               }
+               
+          }
+
      })
      
 })
