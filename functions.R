@@ -176,6 +176,8 @@ read_log_file <- function(path) {
           arrange(Electrode, Time)
      dfz$Electrode<-as.factor(dfz$Electrode)
      
+     dfz<-mutate(dfz, Current=sqrt(Pow/Imp), Voltage=sqrt(Pow*Imp))
+     
      Abl@Data<-dfz
      return(Abl)
      
@@ -211,8 +213,8 @@ df2Ablation <- function(df) {
 }
 
 
-low<-function(x) {quantile(x, 0.05)}
-high<-function(x) {quantile(x, 0.95)}
+low<-function(x) {quantile(x, 0.05, na.rm=T)}
+high<-function(x) {quantile(x, 0.95, na.rm=T)}
 
 rise<-function(x, t, range) {
      if (range[1]>=range[2]){
@@ -283,16 +285,21 @@ case_summary<-function(df, Tmin=0, Tmax=Inf){
      #      average_inrange(x, SingleE$Time, c(Tmin-1, Tmin))
      # }
      # 
-     dff<-filter(df, Time>=Tmin, Time<=Tmax) %>% group_by(AblNum,Electrode) %>% dplyr::select_("AblNum", "Electrode", "Pow", "Temp", "Imp") %>%
+     dff<-filter(df, Time>=Tmin, Time<=Tmax) %>% group_by(AblNum,Electrode) %>% dplyr::select_("AblNum", "Electrode", "Pow", "Temp", "Imp", "Current", "Voltage") %>%
                     #summarize_each_(funs("max","high","mean", "median", "low", "min"),c("Pow", "Temp", "Imp"))
-          summarize_each(funs(max,high,mean, median, low, min),c(Pow, Temp, Imp))
+          summarize_each(funs(max(.,na.rm=T),high,mean(.,na.rm=T), median(.,na.rm=T), low, min(.,na.rm=T)),c(Pow, Temp, Imp, Current, Voltage))
      
      dp<-group_by(df, AblNum,Electrode) %>% summarize(Date=Date[1], 
                                                       MaxDuration=MaxDuration[1],
-                                                      Duration_sec=max(Time), 
+                                                      Duration_sec=max(Time),
                                                       Catheter=Catheter[1],
                                                       AblMode=AblMode[1],
                                                       StopReason=StopReason[1],
+                                                      StopType=factor(ifelse(!grepl("Ablation Stop ",StopReason[1]) & !is.na(StopReason[1]), "Error",
+                                                                                 ifelse(grepl("message from generator",StopReason[1]),"Stopped",
+                                                                                        ifelse(grepl("reached final duration",StopReason[1]),"FullDuration", "Unspecified"))),
+                                                                          levels = c("FullDuration", "Stopped", "Error", "Unspecified")),
+                                                      ErrorElec=as.numeric(str_extract(StopReason[1], "[0-9]+")),
                                                       PreAblationTime=as.factor(round(abs(Time[1]))), 
                                                       PowTarget=max(PowT),
                                                       TempTarget=max(TempT), 
@@ -310,7 +317,12 @@ case_summary<-function(df, Tmin=0, Tmax=Inf){
                                                       Imp_initial=average_inrange(Imp,Time,c(max(Tmin-1, min(Time)),Tmin))
                                                       
                                                       )
-     dd<-merge(dp, dff, by=c("AblNum", "Electrode"))
+     
+     dft<-group_by(dp, AblNum) %>% summarize(Date=min(Date), Duration=min(Duration_sec)) %>% mutate(TimebetAbl_sec=as.numeric(difftime(lead(Date), Date, units="sec"))-Duration) %>% dplyr::select(-Date, -Duration)
+     
+     dp<-merge(dp, dft, by="AblNum")
+          
+     dd<-merge(dp, dff, by=c("AblNum", "Electrode"), all=T)
      
      dd<-arrange(dd, AblNum, Electrode) %>% dplyr::select(-Imp_drop,  Imp_drop)
       
@@ -329,7 +341,7 @@ read_all_ablations<-function(path){
           
           Abl<-read_log_file(files[i])
           df<-Abl@Data
-          S <- data.frame(AblNum=as.factor(Abl@AblNum),
+          S <- data.frame(AblNum=Abl@AblNum,
                           Date=Abl@Date,
                           SW_version=Abl@SW_version,
                           HW_version=Abl@HW_version,

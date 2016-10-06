@@ -64,7 +64,8 @@ shinyUI(fluidPage(
                              uiOutput("load_case"),
                              fluidRow(
                                   column(2,selectInput("param_case_y", label = "Select Y Axis Parameter", 
-                                                       choices = list("Power" = "Pow", "Temperature" = "Temp", "Impedance" = "Imp", "Energy"="Energy", "Duration"="Duration"), selected = "Pow")
+                                                       choices = list("Power" = "Pow", "Temperature" = "Temp", "Impedance" = "Imp", "Energy"="Energy",
+                                                                      "Current"="Current", "Voltage"="Voltage","Duration"="Duration", "TimebetAbl"="TimebetAbl"), selected = "Pow")
                                          ),
                                   column(2,selectInput("sumy", label = "Summarize by", 
                                                        choices = list("mean" = "mean"), selected="mean")
@@ -91,7 +92,10 @@ shinyUI(fluidPage(
                     
                     tabPanel("Big Picture Demo", 
                              passwordInput("password", "Password:"),
-                             uiOutput("md")
+                             div(style='height:800px; overflow-y: scroll',
+                                 uiOutput("md")
+                             )
+                             
                     )
                )
           )

@@ -157,7 +157,7 @@ shinyServer(function(input, output, session) {
                          incProgress(1/length(files$datapath), detail = files$name[i])
                          Abl<-read_log_file(files$datapath[i])
                          df<-Abl@Data
-                         S <- data.frame(AblNum=as.factor(Abl@AblNum), 
+                         S <- data.frame(AblNum=Abl@AblNum, 
                                          Date=Abl@Date, 
                                          SW_version=Abl@SW_version,
                                          HW_version=Abl@HW_version,
@@ -167,7 +167,8 @@ shinyServer(function(input, output, session) {
                                          Catheter=Abl@Catheter,
                                          AblMode=Abl@Mode,
                                          StopReason=Abl@StopReason,
-                                         Annotation=Abl@Annotation
+                                         Annotation=Abl@Annotation, 
+                                         stringsAsFactors = F
                          )
                          
                          S<-S[rep(1,nrow(df)),] 
@@ -221,11 +222,14 @@ shinyServer(function(input, output, session) {
                     dfp<-dplyr::select_(dfp,"AblNum", "Electrode", yaxis) 
                     names(dfp)[names(dfp)==yaxis]<-"Yaxis"
                     output$CasePlot <- renderPlotly({
-                         plot_ly(dfp, x=AblNum, y=Yaxis, mode = "markers", color = Electrode, colors = "Paired", marker = list(opacity = 0.8, size = 12)) %>%
+                         plot_ly(dfp, x=AblNum, y=Yaxis, mode = "markers", color = Electrode, colors = "Paired", 
+                                 hoverinfo="text", text=paste("Ablation: ", AblNum, "<br>", "Elec: ", Electrode, "<br>", sprintf("%s: ", yaxis), Yaxis),
+                                 marker = list(opacity = 0.8, size = 12)) %>%
                               
                               layout(title = sprintf("Case Summary - %s", yaxis), 
                                      xaxis = list(title = "Ablation Number", ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
                                      yaxis=  list(title=yaxis, range = c(ifelse(min(Yaxis)>0,0,min(Yaxis)*1.05), max(Yaxis)*1.05), autotick = T, tick0 = 0, ticks = "outside",showline=T,zeroline=T,gridcolor = toRGB("gray80"))
+                                                  
                                      
                               )
                     })
