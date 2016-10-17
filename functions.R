@@ -6,6 +6,8 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(pracma)
+library(mailR)
+
 
 setClass(Class="ablation",
          representation(
@@ -78,12 +80,27 @@ read_log_file <- function(path) {
      }
      
      if (grepl("Ablation", footer) | grepl("Error", footer)){
-          body<-lines[(n_header+1):(length(lines)-k-1)]
+          start <- n_header+1
+          stop <-length(lines)-k-1
+          if (start<=stop){
+               body<-lines[start:stop]     
+          }else{
+               body<-NULL
+          }
+          
           Abl@StopReason<-trimws(str_split(footer,"\t")[[1]][2])
      }else{
-          body<-lines[(n_header+1):(length(lines)-k)]
+          
+          start <-n_header+1
+          stop <-length(lines)-k
+          if (start<=stop){
+               body<-lines[start:stop]     
+          }else{
+               body<-NULL
+          }
           Abl@StopReason<-"Unspecified"
      }
+     
      
      Abl@Annotation<-""
      
@@ -121,6 +138,12 @@ read_log_file <- function(path) {
      titles<-c("Time",titles)
      
    
+     if(is.null(body)){
+          Abl@Annotation<-"No data in the log file"
+          Abl@Data<-data.frame(data=NULL)
+          return(Abl)
+     }
+     
      ts<-NULL
      
      
@@ -132,9 +155,6 @@ read_log_file <- function(path) {
      for (k in 1:length(body)){
           s<-trimws(str_split(body[k],"[\\t\\/\\|]")[[1]])
           s<-s[s!=""]
-          if (k==78){
-               a<-1
-          }
           
           if (length(s)!=length(titles)+1){
                err<-c(err,k)
@@ -216,21 +236,6 @@ df2Ablation <- function(df) {
 low<-function(x) {quantile(x, 0.05, na.rm=T)}
 high<-function(x) {quantile(x, 0.95, na.rm=T)}
 
-rise<-function(x, t, range) {
-     if (range[1]>=range[2]){
-          return(NA)
-     }
-     start<-which(t>=range[1])[1]
-     stop<- tail(which(t<=range[2]),1)
-     
-     if (is.na(start) | is.na(stop)){
-          return(NA)
-     }else{
-          initial<-
-          return(mean(x[start:stop]))
-     }
-     
-}
 
 average_inrange <-function(x, t, range){
      
@@ -287,7 +292,7 @@ case_summary<-function(df, Tmin=0, Tmax=Inf){
      # 
      dff<-filter(df, Time>=Tmin, Time<=Tmax) %>% group_by(AblNum,Electrode) %>% dplyr::select_("AblNum", "Electrode", "Pow", "Temp", "Imp", "Current", "Voltage") %>%
                     #summarize_each_(funs("max","high","mean", "median", "low", "min"),c("Pow", "Temp", "Imp"))
-          summarize_each(funs(max(.,na.rm=T),high,mean(.,na.rm=T), median(.,na.rm=T), low, min(.,na.rm=T)),c(Pow, Temp, Imp, Current, Voltage))
+          summarize_each(funs(max(.,na.rm=T),high,mean(.,na.rm=T), median(.,na.rm=T), low, min(.,na.rm=T), sd(.,na.rm=T)),c(Pow, Temp, Imp, Current, Voltage))
      
      dp<-group_by(df, AblNum,Electrode) %>% summarize(Date=Date[1], 
                                                       MaxDuration=MaxDuration[1],
@@ -301,20 +306,23 @@ case_summary<-function(df, Tmin=0, Tmax=Inf){
                                                                           levels = c("FullDuration", "Stopped", "Error", "Unspecified")),
                                                       ErrorElec=as.numeric(str_extract(StopReason[1], "[0-9]+")),
                                                       PreAblationTime=as.factor(round(abs(Time[1]))), 
-                                                      PowTarget=max(PowT),
-                                                      TempTarget=max(TempT), 
-                                                      isActive=(PowTarget>0 & max(Time)>0), 
+                                                      Pow_target=max(PowT),
+                                                      Temp_target=max(TempT), 
+                                                      isActive=(Pow_target>0 & max(Time)>0), 
+                                                      Pow_risetime=ifelse(isActive & max(Pow)>0.95*Pow_target, 
+                                                                            head(Time[Pow>=Pow_target*0.95],1)-head(Time[Pow>=Pow_target*0.05],1),
+                                                                            NA), 
                                                       Energy_Joules=trapz(Time, Pow),
                                                    
-                                                      Imp_drop=ifelse(isActive, 
-                                                                      quantile(Imp[Imp>0],0.95)-quantile(Imp[Imp>0],0.05),
-                                                                      NA),
-                                                      
                                                       Temp_initial=ifelse(max(Pow)>0, Temp[Pow>0][1],Temp[Time>=Tmin][1]),
                                                       Temp_rise=ifelse(isActive, 
                                                                        quantile(Temp[Time>Tmin],0.95)-Temp_initial,
                                                                        NA),
-                                                      Imp_initial=average_inrange(Imp,Time,c(max(Tmin-1, min(Time)),Tmin))
+                                                      Imp_initial=average_inrange(Imp,Time,c(max(Tmin-1, min(Time)),Tmin)),
+                                                      Imp_drop=ifelse(isActive, 
+                                                                      Imp_initial-quantile(Imp[Imp>0],0.05),
+                                                                      NA) 
+                                                      
                                                       
                                                       )
      
@@ -341,6 +349,9 @@ read_all_ablations<-function(path){
           
           Abl<-read_log_file(files[i])
           df<-Abl@Data
+          if (nrow(df)==0){
+               next
+          }
           S <- data.frame(AblNum=Abl@AblNum,
                           Date=Abl@Date,
                           SW_version=Abl@SW_version,
@@ -351,7 +362,8 @@ read_all_ablations<-function(path){
                           Catheter=Abl@Catheter,
                           AblMode=Abl@Mode,
                           StopReason=Abl@StopReason,
-                          Annotation=Abl@Annotation
+                          Annotation=Abl@Annotation, 
+                          stringsAsFactors = F
           )
 
           S<-S[rep(1,nrow(df)),]
@@ -362,3 +374,87 @@ read_all_ablations<-function(path){
      return(dfs)
 
 }
+
+
+read_carto_force<-function(path_to_zip){
+     filesdir <- unzip(path_to_zip, list  = T)
+     files <- filesdir$Name[grepl(pattern = "ContactForceInRF.*txt", x = filesdir$Name)]
+     
+     dff<-NULL
+     
+     for (i in seq_along(files)){
+          r<-str_match(files[i], ".*-.*_([:digit:]+).*")
+          AblNum<-as.numeric(r[2])
+          df<- read.table(unz(path_to_zip, files[i]), header = T)
+          df$AblNum<-AblNum
+          dff<-rbind(dff,df)
+
+     }
+     
+     return(dff)
+     
+}
+
+force_summary<-function(dff){
+     dffs<-group_by(dff, AblNum) %>% dplyr::select(TimeStamp, AblNum, ForceValue, AxialAngle, LateralAngle) %>%
+          summarize_each(funs(max(.,na.rm=T),high,mean(.,na.rm=T), median(.,na.rm=T), low, min(.,na.rm=T), sd(., na.rm=T)),c(TimeStamp,ForceValue, AxialAngle, LateralAngle)) %>%
+          mutate(Duration_sec=(TimeStamp_max-TimeStamp_min)/1000) %>%
+          dplyr::select(-contains("TimeStamp")) %>%
+          arrange(AblNum)
+     #dffs<-as.data.frame(dffs)
+     
+}
+
+
+read_carto_sites<-function(path_to_zip){
+     filesdir <- unzip(path_to_zip, list  = T)
+     f<-filesdir$Name[grepl(pattern = "VisiTagExport/Sites.txt", x = filesdir$Name)]
+     
+     df<-NULL
+     if (length(f)>0){
+          df<- read.table(unz(path_to_zip, f), header = T)
+     }
+     df[df==-10000]<-NA
+     dfs<-dplyr::select(df,Session,ChannelID, X,Y,Z, DurationTime)%>%                #,MaxTemperature, MaxPower, BaseImpedance) %>%
+          mutate(Session=Session-Session[1]+1, ChannelID=ChannelID+1) %>% 
+          rename(AblNum=Session, Electrode=ChannelID, DurationC=DurationTime) %>%    #Temp_maxC=MaxTemperature, Pow_maxC=MaxPower, Imp_initialC=BaseImpedance) %>% 
+          mutate_each(funs(.*DurationC), c(X, Y, Z)) %>%                             #, Temp_maxC, Pow_maxC, Imp_initialC)) %>% 
+          group_by(AblNum, Electrode) %>% summarize_each(funs(sum)) %>% mutate_each(funs(./DurationC),c(X, Y, Z)) #, Temp_maxC, Pow_maxC, Imp_initialC))
+     return(dfs)
+          
+}
+
+merge_carto_gen<-function(dfc ,dfg){
+     dfcs<-group_by(dfc,AblNum) %>% summarize(DurationC=max(DurationC)) %>% arrange(AblNum)
+     dfgs<-group_by(dfg,AblNum) %>% summarize(Duration_sec=max(Duration_sec)) %>% top_n(nrow(dfcs)) %>% arrange(AblNum)
+     
+     dfcg<-data.frame(AblNumC=dfcs$AblNum, AblNumG=dfgs$AblNum)
+     
+     dfc<-mutate(dfc,AblNumM=AblNum)
+     
+     for (n in 1:nrow(dfcg)){
+          dfc$AblNum[dfc$AblNumM==dfcg$AblNumC[n]]<-dfcg$AblNumG[n]
+     }
+     dfc<-dplyr::select(dfc, -AblNumM, -DurationC)
+     dfm<-merge(dfg, dfc, by=c("AblNum","Electrode"), all=T)
+     return(dfm)
+     
+}
+
+get_user<-function (){
+     Sys.getenv("USERNAME")
+}
+
+sender <- "ep.robot.bwi@gmail.com"
+recipients <- c("alifshi1@its.jnj.com")
+send.mail(from = sender,
+          to = recipients,
+          subject = "Hello World",
+          body = "Hi",
+          smtp = list(host.name = "smtp.gmail.com", port = 465,
+                      user.name = "ep.robot.bwi@gmail.com",
+                      passwd = "eprobotbwi", ssl = TRUE),
+          authenticate = TRUE,
+          send = TRUE)
+
+     

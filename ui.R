@@ -5,7 +5,10 @@ require(markdown)
 shinyUI(fluidPage(
      includeScript("./www/text.js"),
      # Application title
-     titlePanel("EP Data Analysis Platform"),
+     titlePanel("EP Data Analysis Platform (Beta)"),
+     helpText("The platform is at an early development stage, bugs are possible. Use with caution."),
+     helpText("Please report bugs or suggestions to ", a("Alexander Lifshitz", href="mailto:alifshi1@its.jnj.com", target="_blank")),
+     
      
      # Sidebar with controls to select the random distribution type
      # and number of observations to generate. Note the use of the
@@ -15,9 +18,10 @@ shinyUI(fluidPage(
                #fileInput('file', 'Select Ablation Log file',accept=c('.zip','.txt')),
                # directoryInput('directory', label = 'Select a folder',
                #                value = 'C:\\Data Science\\nMARQ Shiny\\test'),
+               #textOutput("hello"),
                tags$div(class="form-group shiny-input-container",
                         #tags$label("Select a folder"),
-                        tags$div(tags$label("Load Case", class="btn btn-primary",
+                        tags$div(tags$label("Load Generator Case", class="btn btn-primary",
                                             tags$input(id = "Dir", webkitdirectory = TRUE,
                                                        type = "file", accept=".txt", style="display: none;", onchange="pressed()"))),
                         tags$div(id="Dir_progress", class="progress progress-striped active shiny-file-input-progress",
@@ -75,7 +79,12 @@ shinyUI(fluidPage(
                                   
                              ),
                              
-                             plotlyOutput("CasePlot",height = "500px")
+                             plotlyOutput("CasePlot",height = "500px"), 
+                             tags$hr(),
+                             selectInput("param_t", label = "Select Parameter", 
+                                         choices = list("Power" = "Pow", "Temperature" = "Temp", "Impedance" = "Imp", 
+                                                        "Current"="Current", "Voltage"="Voltage"), selected=NULL),
+                             plotlyOutput("TimePlot",height = "500px")
                              ),
                     
                     tabPanel("Export Data", 
@@ -87,6 +96,8 @@ shinyUI(fluidPage(
                              downloadButton('downloadRawData', 'Export Raw Data'),
                              br(),
                              DT::dataTableOutput('All_data'),
+                             tags$hr(),
+                             downloadButton('downloadReport', 'Export Raw Data to R'),
                              tags$hr()
                     ),
                     

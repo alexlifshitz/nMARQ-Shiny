@@ -18,6 +18,11 @@ Annotations<-NULL
 
 shinyServer(function(input, output, session) {
      
+     # output$hello <- renderText({ 
+     #      paste("Hello ", get_user())
+     # })
+     # 
+     
      observeEvent(
           ignoreNULL = T,
           eventExpr = {
@@ -153,10 +158,13 @@ shinyServer(function(input, output, session) {
                withProgress(message = 'Processing ablations files...', value = 0, {
                     
                     for (i in seq_along(files$datapath)){
-                         print(files$name[i])
+                         #print(files$name[i])
                          incProgress(1/length(files$datapath), detail = files$name[i])
                          Abl<-read_log_file(files$datapath[i])
                          df<-Abl@Data
+                         if (nrow(df)==0){
+                              next
+                         }
                          S <- data.frame(AblNum=Abl@AblNum, 
                                          Date=Abl@Date, 
                                          SW_version=Abl@SW_version,
@@ -219,16 +227,17 @@ shinyServer(function(input, output, session) {
                
                yaxis<-paste(input$param_case_y,input$sumy,sep="_")
                if (yaxis %in% names(dfp)){
-                    dfp<-dplyr::select_(dfp,"AblNum", "Electrode", yaxis) 
+                    dfp<-dplyr::select_(dfp,"AblNum", "Electrode",  yaxis) 
                     names(dfp)[names(dfp)==yaxis]<-"Yaxis"
+                 
                     output$CasePlot <- renderPlotly({
-                         plot_ly(dfp, x=AblNum, y=Yaxis, mode = "markers", color = Electrode, colors = "Paired", 
-                                 hoverinfo="text", text=paste("Ablation: ", AblNum, "<br>", "Elec: ", Electrode, "<br>", sprintf("%s: ", yaxis), Yaxis),
-                                 marker = list(opacity = 0.8, size = 12)) %>%
+                         plot_ly(dfp, x=~AblNum, y=~Yaxis, color = ~Electrode, colors = "Paired",marker=list(alpha=0.8, size=12)) %>%
+                              add_markers(hoverinfo="text", text=~paste("Ablation: ", AblNum, "<br>", "Elec: ", Electrode, "<br>", sprintf("%s: ", yaxis), Yaxis)) %>%
                               
                               layout(title = sprintf("Case Summary - %s", yaxis), 
                                      xaxis = list(title = "Ablation Number", ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
-                                     yaxis=  list(title=yaxis, range = c(ifelse(min(Yaxis)>0,0,min(Yaxis)*1.05), max(Yaxis)*1.05), autotick = T, tick0 = 0, ticks = "outside",showline=T,zeroline=T,gridcolor = toRGB("gray80"))
+                                     #yaxis=  list(title=yaxis, range = c(ifelse(min(Yaxis)>0,0,min(Yaxis)*1.05), max(Yaxis)*1.05), autotick = T, tick0 = 0, ticks = "outside",showline=T,zeroline=T,gridcolor = toRGB("gray80"))
+                                     yaxis=  list(title=yaxis, autotick = T, tick0 = 0, ticks = "outside",showline=T,zeroline=F,gridcolor = toRGB("gray80"))
                                                   
                                      
                               )
@@ -237,6 +246,56 @@ shinyServer(function(input, output, session) {
                }
                
     })
+     
+     observeEvent(
+          ignoreNULL = T,
+          eventExpr = {
+               input$action
+               input$param_t
+               input$active
+          },
+          handlerExpr = {
+               
+               
+               if (is.null(Ablations)) {
+                    SumAblations<<-NULL
+                    return(NULL)
+               }
+               
+               if (input$active==T){
+                    abl_nums<-unique(SumAblations$AblNum[SumAblations$isActive])
+               }else{
+                    abl_nums<-unique(SumAblations$AblNum)
+               }
+               
+               
+               raw_abl<-filter(Ablations, AblNum %in% abl_nums)
+               raw_abl<-merge(raw_abl, dplyr::select(SumAblations, c(AblNum, Electrode, Pow_target)), by=c("AblNum", "Electrode"))
+                    
+               yaxis<-input$param_t
+           
+               if (yaxis %in% names(raw_abl)){
+                    dfp<-dplyr::select_(raw_abl,"Time", "AblNum", "Electrode", "Pow_target", "TempT", yaxis) %>% mutate(AblElec=paste(AblNum, Electrode, sep="_"))
+                    names(dfp)[names(dfp)==yaxis]<-"Yaxis"
+                    
+                    output$TimePlot <- renderPlotly({
+                         
+                         dfp %>%
+                              group_by(AblElec) %>%
+                              plot_ly(x=~Time, y=~Yaxis) %>%
+                              add_lines(split = ~Pow_target,alpha = 0.35)%>% 
+                              layout(title = sprintf("Case Summary - %s", yaxis), 
+                                     xaxis = list(title = "Time[sec]", ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
+                                     yaxis=  list(title=yaxis, autotick = T, tick0 = 0, ticks = "outside",showline=T,zeroline=F,gridcolor = toRGB("gray80"))
+                                     
+                                     
+                              )
+
+                    })
+                    
+               }
+               
+          })
      
      observeEvent(
           ignoreNULL = T,
@@ -270,6 +329,14 @@ shinyServer(function(input, output, session) {
                DT::datatable(SumAblations, filter = 'top',rownames = FALSE,options = list(orderClasses = TRUE,pageLength = 5,dom = 'tip',autoWidth = F)) #pageLength = 10
           })
           
+          
+          output$downloadReport <- downloadHandler(
+               filename = function() { paste('Data', '.rds', sep='') },
+               content = function(file) {
+                    saveRDS(Ablations,file)
+               }
+          )
+          
           output$downloadRawData <- downloadHandler(
                filename = function() { paste('All_data', '.csv', sep='') },
                content = function(file) {
@@ -300,12 +367,23 @@ shinyServer(function(input, output, session) {
                 return(NULL)
           }
           
+          yaxis<-names(Ablation@Data)[as.numeric(input$param)]
+          dfa<-dplyr::select_(Ablation@Data, "Time" ,yaxis, "Electrode")
+          names(dfa)[names(dfa)==yaxis]<-"Yaxis"
+          
           
           output$ParamPlot <- renderPlotly({
-          g<-ggplot(Ablation@Data, aes_string(x="Time", y=names(Ablation@Data)[as.numeric(input$param)], color="Electrode"))+
-               geom_line()+labs(title = sprintf("Ablation #%d %s %s", Ablation@AblNum, Ablation@Catheter, Ablation@Mode)) + 
-               xlab("Time [sec]")+ylab(names(Ablation@Data)[as.numeric(input$param)])+xlim(-5, Ablation@MaxDuration)
-          ggplotly(g)
+               plot_ly(dfa, x=~Time, y=~Yaxis, color=~Electrode) %>% add_lines(colors="Paired") %>%
+                    layout(title = sprintf("Ablation #%d %s %s", Ablation@AblNum, Ablation@Catheter, Ablation@Mode), 
+                           xaxis = list(title = "Time[sec]", ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
+                           yaxis=  list(title=yaxis, autotick = T, tick0 = 0, ticks = "outside",showline=T,zeroline=F,gridcolor = toRGB("gray80"))
+                           
+                           
+                    )
+          # g<-ggplot(Ablation@Data, aes_string(x="Time", y=names(Ablation@Data)[as.numeric(input$param)], color="Electrode"))+
+          #      geom_line()+labs(title = sprintf("Ablation #%d %s %s", Ablation@AblNum, Ablation@Catheter, Ablation@Mode)) + 
+          #      xlab("Time [sec]")+ylab(names(Ablation@Data)[as.numeric(input$param)])+xlim(-5, Ablation@MaxDuration)
+          # ggplotly(g)
           })
           
           output$table2 <- renderTable(param_summary(Ablation,names(Ablation@Data)[as.numeric(input$param)]),include.rownames=FALSE)
@@ -320,7 +398,7 @@ shinyServer(function(input, output, session) {
           }
           
           df<-filter(Ablation@Data,Electrode==input$elec)
-          
+          a<-list()
           a <- list(
                x = Ablation@MaxDuration,
                y = max(c(df$Temp,df$Pow, df$TempT, df$PowT))*1.03,
@@ -336,7 +414,7 @@ shinyServer(function(input, output, session) {
                x = min(Ablation@Data$Time)+0.5,
                y = max(c(df$Temp,df$Pow, df$TempT, df$PowT))*1.03,
                xanchor = "left",
-               text = Ablation@Date,
+               text = as.character(Ablation@Date),
                xref = "x",
                yref = "y",
                showarrow = F,
@@ -353,21 +431,30 @@ shinyServer(function(input, output, session) {
           )
           output$ElectrodePlot <- renderPlotly({
                
-               plot_ly(df, x = Time, y = Pow, name = "Power", mode = "lines", 
-                       line = list(color = toRGB("red")), hoverinfo="text", text=paste("Time:", Time, "<br>", "Power: ", Pow)) %>%
-                    add_trace(x = Time, y = Temp, name = "Temperature",mode = "lines", 
-                              line = list(color = toRGB("blue")),hoverinfo="text", text=paste("Time:", Time, "<br>", "Temp: ", Temp)) %>%
-                    add_trace(x = Time, y = Imp, name = "Impedance",yaxis = "y2",mode = "lines", 
-                              line = list(color = toRGB("green")),hoverinfo="text", text=paste("Time:", Time, "<br>", "Imp: ", Imp)) %>%
-                    add_trace(x = Time, y = TempT, name = "TempT", showlegend=F,mode = "lines", line = list(color = toRGB("blue"), dash="5px"), hoverinfo = "none")%>% 
-                    add_trace(x = Time, y = PowT, name = "PowT", showlegend=F,mode = "lines", line = list(color = toRGB("red"), dash="5px"),hoverinfo = "none") %>%
-                    layout(title = sprintf("Ablation #%d: Electrode %s  (Catheter: %s %s)", Ablation@AblNum, input$elec, Ablation@Catheter, Ablation@Mode), 
+               plot_ly(df, x = ~Time, y = ~Pow, name = "Power", type="scatter", mode = "lines", 
+                       line = list(color = toRGB("red")), hoverinfo="text", text=~paste("Time:", Time, "<br>", "Power: ", Pow)) %>%
+                    add_lines(x = ~Time, y = ~Temp, name = "Temperature",
+                              line = list(color = toRGB("blue")),hoverinfo="text", text=~paste("Time:", Time, "<br>", "Temp: ", Temp)) %>%
+                    add_lines(x = ~Time,y = ~Imp, name = "Impedance",yaxis = "y2",
+                              line = list(color = toRGB("green")),hoverinfo="text", text=~paste("Time:", Time, "<br>", "Imp: ", Imp)) %>%
+                         add_trace(y = ~TempT, name = "TempT", showlegend=F,mode = "lines", line = list(color = toRGB("blue"), dash="5px"), hoverinfo = "none")%>%
+                    add_trace(y = ~PowT, name = "PowT", showlegend=F,mode = "lines", line = list(color = toRGB("red"), dash="5px"),hoverinfo = "none") %>%
+                    layout(title = sprintf("Ablation #%d: Electrode %s  (Catheter: %s %s)", Ablation@AblNum, input$elec, Ablation@Catheter, Ablation@Mode),
                            yaxis2 = list(title="Impedance [Ohm]",overlaying = "y",side = "right",
-                                         range = c(min(df$Imp)*0.95, max(df$Imp)*1.05), autotick = T, tick0=0, dtick=max(1,ceiling((max(df$Imp)-min(df$Imp))/10)), ticks = "outside",showgrid=F, showline=T,zeroline=F),
-                           xaxis = list(title = "Time [sec]", range = c(Ablation@Data$Time[1], Ablation@MaxDuration), autorange = F,autotick = T, tick0 = Ablation@Data$Time[1], ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")), 
-                           yaxis=list(title="Power [W]/Temperature [deg C]", range = c(0, max(c(df$Temp,df$Pow, df$TempT, df$PowT))*1.05), autotick = T, tick0 = 0, dtick = 5, ticks = "outside",showline=T,zeroline=F,gridcolor = toRGB("gray80")),
-                           annotations=list(a,b), margin=m, legend=list(x=1.05, orientation="v")
-                    ) 
+                                         #range = c(min(df$Imp)*0.95, max(df$Imp)*1.05), autotick = T, tick0=0, dtick=max(1,ceiling((max(df$Imp)-min(df$Imp))/10)),
+                                         ticks = "outside",showgrid=F, showline=T,zeroline=F),
+                           xaxis = list(title = "Time [sec]",
+                                        #range = c(Ablation@Data$Time[1], Ablation@MaxDuration),
+                                        autorange = T,autotick = T,
+                                        tick0 = -5, #Ablation@Data$Time[1],
+                                        ticks = "outside",zeroline=F, showline=T, gridcolor = toRGB("gray80")),
+                           yaxis=list(title="Power [W]/Temperature [deg C]",
+                                      #range = c(0, max(c(df$Temp,df$Pow, df$TempT, df$PowT))*1.05),
+                                      autotick = T, tick0 = 0, dtick = 5, ticks = "outside",showline=T,zeroline=F,gridcolor = toRGB("gray80")),
+                           margin=m, legend=list(x=1.05, orientation="v")
+                    ) %>% add_annotations(x=~c(a$x, b$x), y=~c(a$y, b$y),
+                                          text=~c(a$text,b$text), xanchor = c("right", "left"), xref = c("x", "x"),yref=c("y", "y"), 
+                                          showarrow = c(F,F),ax = c(0,0),ay = c(0,0))
           })
           
           output$table1 <- renderTable(elec_summary(Ablation,input$elec),include.rownames=FALSE)
