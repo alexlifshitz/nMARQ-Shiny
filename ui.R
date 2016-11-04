@@ -35,6 +35,7 @@ shinyUI(fluidPage(
                textInput("doctor", label="Physician", value = "", width = "100%", placeholder = "John"),
                textInput("site", label="Site", value = "", width = "100%", placeholder = "Site Name"),
                #tags$textarea(id="description", rows=3, cols=40, "Default value")
+               textInput("date", label="Date", value="", width = "100%"),
                textInput("description", label="Case Description", value = "", width = "100%", placeholder = "Demo"),
                tags$hr()
                
@@ -101,8 +102,35 @@ shinyUI(fluidPage(
                              tags$hr()
                     ),
                     
+                    tabPanel("Carto Analysis Demo", 
+                             #passwordInput("password1", "Password:"),
+                             h2("Carto visualization demo"),
+                             fluidRow(
+                                  column(4,
+                                         sliderInput("opacity_qdot", "Anatomy Opacity:",
+                                                     min = 0, max = 1, value = 1, step= 0.1)
+                                         ),
+                                  column(2,selectInput("color_qdot", label = "Color", 
+                                                       choices = list("Target Power" = "Pow_target", "Energy" = "Energy_Joules", "Median Force"="ForceValue_median","Impedance Drop" = "Imp_drop", 
+                                                                      "Temp Rise"="Temp_rise"), selected="Pow_target"))
+                             ),
+                             
+                             fluidRow(
+                                  column(8,plotlyOutput("qdot1",height = "700px")),
+                                  column(2,plotlyOutput("qdot2",height = "700px"))
+                                  ),
+                                  
+                             tags$hr()
+                             # h2("nMARQ catheter visualization demo"),
+                             # sliderInput("opacity_nMARQ", "Anatomy Opacity:",
+                             #             min = 0, max = 1, value = 1, step= 0.1),
+                             # plotlyOutput("nmarq",height = "700px")
+                             
+                             
+                    ),
+                             
                     tabPanel("Big Picture Demo", 
-                             passwordInput("password", "Password:"),
+                             passwordInput("password2", "Password:"),
                              div(style='height:800px; overflow-y: scroll',
                                  uiOutput("md")
                              )

@@ -436,25 +436,64 @@ merge_carto_gen<-function(dfc ,dfg){
           dfc$AblNum[dfc$AblNumM==dfcg$AblNumC[n]]<-dfcg$AblNumG[n]
      }
      dfc<-dplyr::select(dfc, -AblNumM, -DurationC)
-     dfm<-merge(dfg, dfc, by=c("AblNum","Electrode"), all=T)
+     dfm<-merge(dfg, dfc, by=c("case","AblNum","Electrode"), all=T)
      return(dfm)
      
 }
 
-get_user<-function (){
-     Sys.getenv("USERNAME")
+
+read_mesh<-function(path_to_zip){
+     filesdir <- unzip(path_to_zip, list  = T)
+     files <- filesdir$Name[grepl(pattern = "*.mesh", x = filesdir$Name)]
+     
+     if (length(files)>0){
+          f<-files[1]
+          print(f)
+          lines<-readLines(unz(path_to_zip, f),30)
+          ind_v<-which(stri_startswith_fixed(lines,"NumVertex "))[1]
+          nV<-as.numeric(str_split(lines[ind_v],"[:blank:]+", simplify = T)[3])
+          
+          ind_t<-which(stri_startswith_fixed(lines,"NumTriangle "))[1]
+          nT<-as.numeric(str_split(lines[ind_t],"[:blank:]+", simplify = T)[3])
+          ind_vs<-which(stri_startswith_fixed(lines,"[VerticesSection]"))[1]
+          mesh<- read.table(unz(path_to_zip, f), header = T,skip = ind_vs, nrows = nV, blank.lines.skip = T)          
+          mesh<-mesh[,2:4]
+          triangles<-read.table(unz(path_to_zip, f), header = T,skip = ind_vs+nrow(mesh)+4, nrows = nT, blank.lines.skip = T)
+          triangles<-triangles[,2:4]
+          return(list(mesh=mesh, triangles=triangles))
+     }else{
+          return(c(NULL,NULL))
+     }
+     
+     mesh<-mesh[,2:4]
+     triangles<-read.table(unz(p, "1-LA.mesh"), header = T,skip = 18+nrow(mesh)+4, nrows = 47664, blank.lines.skip = T)
+     triangles<-triangles[,2:4]
 }
 
-sender <- "ep.robot.bwi@gmail.com"
-recipients <- c("alifshi1@its.jnj.com")
-send.mail(from = sender,
-          to = recipients,
-          subject = "Hello World",
-          body = "Hi",
-          smtp = list(host.name = "smtp.gmail.com", port = 465,
-                      user.name = "ep.robot.bwi@gmail.com",
-                      passwd = "eprobotbwi", ssl = TRUE),
-          authenticate = TRUE,
-          send = TRUE)
+get_user<-function (){
+     tolower(Sys.getenv("USERNAME"))
+}
+
+
+send_email <-function(recipients, subject="Hello", body=""){
+     if(missing(recipients)) {
+          recipients <- c("alifshi1@its.jnj.com")
+          sender <- "ep.robot.bwi@gmail.com"
+     }
+     
+     send.mail(from = sender,
+               to = recipients,
+               subject = subject,
+               body = body,
+               smtp = list(host.name = "smtp.gmail.com", port = 465,
+                           user.name = "ep.robot.bwi@gmail.com",
+                           passwd = "eprobotbwi", ssl = TRUE),
+               authenticate = TRUE,
+               send = TRUE)
+     
+}
+
+
+
 
      
